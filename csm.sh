@@ -389,11 +389,11 @@ MediaUnlockTest_AbemaTV_IPTest() {
             modifyJsonTemplate 'AbemaTV_result' 'Yes' 'JP'
         else
             echo -n -e "\r Abema.TV:\t\t\t\t${Font_Yellow}Oversea Only (Region: ${region})${Font_Suffix}\n"
-            modifyJsonTemplate 'AbemaTV_result' 'Yes' 'oversea'
+            modifyJsonTemplate 'AbemaTV_result' 'Oversea' "${region}"
         fi
     elif echo "$tmpresult" | grep -q 'anonymous_ip'; then
         echo -n -e "\r Abema.TV:\t\t\t\t${Font_Red}No${Font_Suffix} ${Font_SkyBlue}(Anonymous IP)${Font_Suffix}\n"
-        modifyJsonTemplate 'AbemaTV_result' 'No' 'anonymous'
+        modifyJsonTemplate 'AbemaTV_result' 'Anonymous'
     else
         echo -n -e "\r Abema.TV:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
         modifyJsonTemplate 'AbemaTV_result' 'No'
@@ -413,20 +413,21 @@ MediaUnlockTest_Netflix() {
         return
     fi
 
-    local result1=$(echo ${tmpresult1} | grep 'Oh no!')
-    local result2=$(echo ${tmpresult2} | grep 'Oh no!')
-
-    if [ -n "${result1}" ] && [ -n "${result2}" ]; then
-        echo -n -e "\r Netflix:\t\t\t\t${Font_Yellow}Originals Only${Font_Suffix}\n"
-        modifyJsonTemplate 'Netflix_result' 'No' 'Originals Only'
-        return
-    fi
-
     local region=$(echo "$tmpresult1" | sed -n 's/.*"id":"\([^"]*\)".*"countryName":"[^"]*".*/\1/p' | head -n 1)
     if [ -z "${region}" ]; then
         # 与 IPQuality 一致: 第一个页面取不到区服时用第二个页面兜底
         region=$(echo "$tmpresult2" | sed -n 's/.*"id":"\([^"]*\)".*"countryName":"[^"]*".*/\1/p' | head -n 1)
     fi
+
+    local result1=$(echo ${tmpresult1} | grep 'Oh no!')
+    local result2=$(echo ${tmpresult2} | grep 'Oh no!')
+
+    if [ -n "${result1}" ] && [ -n "${result2}" ]; then
+        echo -n -e "\r Netflix:\t\t\t\t${Font_Yellow}Originals Only${Font_Suffix}\n"
+        modifyJsonTemplate 'Netflix_result' 'Originals' "${region}"
+        return
+    fi
+
     if [ -z "${region}" ]; then
         region="US"
     fi
@@ -448,7 +449,7 @@ MediaUnlockTest_DisneyPlus() {
     local is403=$(echo "$PreAssertion" | grep -i '403 ERROR')
     if [ -n "$is403" ]; then
         echo -n -e "\r Disney+:\t\t\t\t${Font_Red}No (IP Banned By Disney+)${Font_Suffix}\n"
-        modifyJsonTemplate 'DisneyPlus_result' 'No' 'IP Banned'
+        modifyJsonTemplate 'DisneyPlus_result' 'Banned'
         return
     fi
 
@@ -467,7 +468,7 @@ MediaUnlockTest_DisneyPlus() {
 
     if [ -n "$isBanned" ] || [ -n "$is403" ]; then
         echo -n -e "\r Disney+:\t\t\t\t${Font_Red}No (IP Banned By Disney+)${Font_Suffix}\n"
-        modifyJsonTemplate 'DisneyPlus_result' 'No' 'IP Banned'
+        modifyJsonTemplate 'DisneyPlus_result' 'Banned'
         return
     fi
 
@@ -536,9 +537,6 @@ MediaUnlockTest_YouTube_Premium() {
         echo -n -e "\r YouTube Premium:\t\t\t${Font_Red}No${Font_Suffix}\n"
         modifyJsonTemplate 'YouTube_Premium_result' 'No' "${region}"
         return
-    fi
-    if [ -z "$region" ] && [ -n "$isAvailable" ]; then
-        region='UNKNOWN'
     fi
     if [ -n "$isAvailable" ]; then
         echo -n -e "\r YouTube Premium:\t\t\t${Font_Green}Yes (Region: ${region})${Font_Suffix}\n"
@@ -899,15 +897,12 @@ modifyJsonTemplate() {
                 Soon) status="soon" ;;
                 Web) status="web" ;;
                 APP) status="app" ;;
+                Originals) status="originals" ;;
+                Oversea) status="oversea" ;;
+                Banned) status="banned" ;;
+                Anonymous) status="anonymous" ;;
                 Unknow) status="unknown" ;;
                 *) status="$(echo "${result}" | tr '[:upper:]' '[:lower:]')" ;;
-            esac
-
-            # 兼容旧调用的描述性参数, 统一为面板端约定的取值
-            case "${region}" in
-                "Oversea Only") region="oversea" ;;
-                "Originals Only") region="originals" ;;
-                "IP Banned") region="banned" ;;
             esac
 
             value="{\"status\":\"${status}\""

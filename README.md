@@ -26,12 +26,12 @@ The code for this script to detect streaming media unlocking is all from the ope
 ```json
 {
   "Netflix":    {"status": "yes", "region": "MY", "type": "native"},
-  "DisneyPlus": {"status": "no",  "region": "MY", "type": "native"},
+  "DisneyPlus": {"status": "soon", "region": "MY", "type": "native"},
   "TikTok":     {"status": "yes", "region": "MY", "type": "dns"},
   "YouTube":    {"status": "yes", "region": "MY", "type": "native"},
   "AmazonPV":   {"status": "yes", "region": "MY", "type": "native"},
-  "Abema":      {"status": "yes", "region": "oversea", "type": "native"},
-  "BBC":        {"status": "no",  "region": "originals", "type": "native"},
+  "Abema":      {"status": "oversea", "region": "MY", "type": "native"},
+  "BBC":        {"status": "no",  "region": "UK", "type": "native"},
   "OpenAI":     {"status": "app", "region": "MO"},
   "Reddit":     {"status": "no", "region": "MY", "type": "native"},
   "UnlockType": "Native",
@@ -42,8 +42,8 @@ The code for this script to detect streaming media unlocking is all from the ope
 
 | 字段 | 取值 |
 | --- | --- |
-| `status` | `yes` / `no` / `soon`（Disney+ 即将上线）/ `web`（ChatGPT 仅网页可用）/ `app`（ChatGPT 仅 APP 可用）/ `unknown`（网络异常） |
-| `region` | 区服码（`US`、`TW`、`MO`…；ChatGPT 取出口 IP 所在地区），或描述值：`oversea`（Abema 海外可用）、`originals`（Netflix 仅自制剧）、`banned`（Disney+ 封禁 IP） |
+| `status` | `yes` / `no` / `soon`（Disney+ 即将上线）/ `originals`（Netflix 仅自制剧）/ `oversea`（Abema 海外可用）/ `banned`（Disney+ 封禁 IP）/ `anonymous`（Abema 判为匿名 IP）/ `web`（ChatGPT 仅网页）/ `app`（ChatGPT 仅 APP）/ `unknown`（网络异常） |
+| `region` | 区服码（`US`、`TW`、`MO`…；ChatGPT 取出口 IP 所在地区），取不到时省略该字段 |
 | `type` | `native`（DNS 未被污染）/ `dns`（DNS 被劫持），取自 `UnlockType` 检测 |
 
 # How to use
