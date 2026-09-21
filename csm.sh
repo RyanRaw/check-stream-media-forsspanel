@@ -373,7 +373,9 @@ MediaUnlockTest_BilibiliTW() {
 }
 
 MediaUnlockTest_AbemaTV_IPTest() {
-    local tmpresult=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Android}" -${1} ${ssll} -fsL --max-time 10 "https://api.abema.io/v1/ip/check?device=android" 2>&1)
+    # 注意: Abema 对机房/匿名 IP 会直接返回 403 {"message":"anonymous_ip"},
+    # 因此这里不能用 curl -f(会把 403 当成网络失败), 与上游一致用 -sL
+    local tmpresult=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Android}" -${1} ${ssll} -sL --max-time 10 "https://api.abema.io/v1/ip/check?device=android" 2>&1)
     if [ -z "$tmpresult" ]; then
         echo -n -e "\r Abema.TV:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
         modifyJsonTemplate 'AbemaTV_result' 'Unknow'
@@ -381,15 +383,20 @@ MediaUnlockTest_AbemaTV_IPTest() {
     fi
 
     local region=$(echo "$tmpresult" | grep_json_value 'isoCountryCode')
-    if [ -z "$region" ]; then
+    if [ -n "$region" ]; then
+        if [ "$region" == 'JP' ]; then
+            echo -n -e "\r Abema.TV:\t\t\t\t${Font_Green}Yes${Font_Suffix}\n"
+            modifyJsonTemplate 'AbemaTV_result' 'Yes' 'JP'
+        else
+            echo -n -e "\r Abema.TV:\t\t\t\t${Font_Yellow}Oversea Only (Region: ${region})${Font_Suffix}\n"
+            modifyJsonTemplate 'AbemaTV_result' 'Yes' 'oversea'
+        fi
+    elif echo "$tmpresult" | grep -q 'anonymous_ip'; then
+        echo -n -e "\r Abema.TV:\t\t\t\t${Font_Red}No${Font_Suffix} ${Font_SkyBlue}(Anonymous IP)${Font_Suffix}\n"
+        modifyJsonTemplate 'AbemaTV_result' 'No' 'anonymous'
+    else
         echo -n -e "\r Abema.TV:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
         modifyJsonTemplate 'AbemaTV_result' 'No'
-    elif [ "$region" == 'JP' ]; then
-        echo -n -e "\r Abema.TV:\t\t\t\t${Font_Green}Yes${Font_Suffix}\n"
-        modifyJsonTemplate 'AbemaTV_result' 'Yes'
-    else
-        echo -n -e "\r Abema.TV:\t\t\t\t${Font_Yellow}Oversea Only (Region: ${region})${Font_Suffix}\n"
-        modifyJsonTemplate 'AbemaTV_result' 'Yes' 'Oversea Only'
     fi
 }
 
