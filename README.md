@@ -42,8 +42,8 @@ The code for this script to detect streaming media unlocking is all from the ope
 
 | 字段 | 取值 |
 | --- | --- |
-| `status` | `yes` / `no` / `unknown`（网络异常） |
-| `region` | 区服码（`US`、`TW`、`HK`…），或描述值：`oversea`（Abema 海外可用）、`originals`（Netflix 仅自制剧）、`banned`（Disney+ 封禁 IP）、`web` / `app`（ChatGPT 仅网页 / 仅 APP）、`<区服> soon`（Disney+ 即将上线，如 `MY soon`） |
+| `status` | `yes` / `no` / `soon`（Disney+ 即将上线）/ `unknown`（网络异常） |
+| `region` | 区服码（`US`、`TW`、`HK`…），或描述值：`oversea`（Abema 海外可用）、`originals`（Netflix 仅自制剧）、`banned`（Disney+ 封禁 IP）、`web` / `app`（ChatGPT 仅网页 / 仅 APP） |
 | `type` | `native`（DNS 未被污染）/ `dns`（DNS 被劫持），取自 `UnlockType` 检测 |
 
 # How to use

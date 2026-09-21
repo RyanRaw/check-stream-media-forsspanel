@@ -494,8 +494,7 @@ MediaUnlockTest_DisneyPlus() {
         return
     elif [ "$inSupportedLocation" == "false" ]; then
         echo -n -e "\r Disney+:\t\t\t\t${Font_Yellow}Available For [Disney+ $region] Soon${Font_Suffix}\n"
-        # 面板端 status 只用 yes/no/unknown, "即将上线" 由 region 表达
-        modifyJsonTemplate 'DisneyPlus_result' 'No' "${region} soon"
+        modifyJsonTemplate 'DisneyPlus_result' 'Soon' "${region}"
         return
     elif [ "$inSupportedLocation" == "true" ]; then
         echo -n -e "\r Disney+:\t\t\t\t${Font_Green}Yes (Region: $region)${Font_Suffix}\n"
@@ -916,6 +915,7 @@ modifyJsonTemplate() {
             case "${result}" in
                 Yes) status="yes" ;;
                 No) status="no" ;;
+                Soon) status="soon" ;;
                 Unknow) status="unknown" ;;
                 *) status="$(echo "${result}" | tr '[:upper:]' '[:lower:]')" ;;
             esac
