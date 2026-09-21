@@ -1,5 +1,27 @@
 #!/bin/bash
+
+# Alpine 等系统默认只有 ash, 若被 sh 调用则自动切换到 bash 执行
+if [ -z "${BASH_VERSION:-}" ]; then
+    if [ -f "$0" ] && command -v bash >/dev/null 2>&1; then
+        exec bash "$0" "$@"
+    fi
+    echo -e "\033[31m本脚本需要 bash, 请先安装 (Alpine: apk add bash)\033[0m"
+    exit 1
+fi
+
 shopt -s expand_aliases
+
+# 本项目目录: 优先取环境变量 CSM_DIR, 其次脚本所在目录, 最后回落到 $HOME
+# 所有配置文件 / 检测报告均保存在该目录下, 便于自定义安装位置
+if [ -n "${CSM_DIR:-}" ]; then
+    :
+elif [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+    CSM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+    CSM_DIR="${HOME}"
+fi
+mkdir -p "${CSM_DIR}"
+
 Font_Black="\033[30m"
 Font_Red="\033[31m"
 Font_Green="\033[32m"
@@ -60,10 +82,37 @@ if ! mktemp -u --suffix=RRC &>/dev/null; then
     is_busybox=1
 fi
 
-UA_Browser="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.87 Safari/537.36"
+# 与上游 lmc999/RegionRestrictionCheck (check.sh) 保持一致的 UA
+UA_Browser="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+UA_Android="Mozilla/5.0 (Linux; Android 10; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
+UA_SEC_CH_UA='"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"'
 UA_Dalvik="Dalvik/2.1.0 (Linux; U; Android 9; ALP-AL00 Build/HUAWEIALP-AL00)"
-Media_Cookie=$(curl -s --retry 3 --max-time 10 "https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/cookies")
-IATACode=$(curl -s --retry 3 --max-time 10 "https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/reference/IATACode.txt")
+
+# busybox grep 不支持 -P, 统一走本函数取值: grep_json_value <key>
+if echo 'a' | grep -P 'a' >/dev/null 2>&1; then
+    HAS_PCRE=1
+else
+    HAS_PCRE=0
+fi
+
+grep_json_value() {
+    local key="$1"
+    if [ "${HAS_PCRE}" = "1" ]; then
+        grep -woP "\"${key}\"\s{0,}:\s{0,}\"?\K[^\",]+" | head -n 1
+    else
+        sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\).*/\1/p" | head -n 1 | tr -d '[:space:]'
+    fi
+}
+# 优先使用本项目仓库内的资源, 拉取失败时回落到上游 lmc999/RegionRestrictionCheck
+CSM_REPO_RAW="https://raw.githubusercontent.com/RyanRaw/check-stream-media-forsspanel/main"
+Media_Cookie=$(curl -s --retry 3 --max-time 10 "${CSM_REPO_RAW}/cookies")
+if [ -z "${Media_Cookie}" ]; then
+    Media_Cookie=$(curl -s --retry 3 --max-time 10 "https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/cookies")
+fi
+IATACode=$(curl -s --retry 3 --max-time 10 "${CSM_REPO_RAW}/reference/IATACode.txt")
+if [ -z "${IATACode}" ]; then
+    IATACode=$(curl -s --retry 3 --max-time 10 "https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/reference/IATACode.txt")
+fi
 WOWOW_Cookie=$(echo "$Media_Cookie" | awk 'NR==3')
 TVer_Cookie="Accept: application/json;pk=BCpkADawqM0_rzsjsYbC1k1wlJLU4HiAtfzjxdUmfvvLUQB-Ax6VA-p-9wOEZbCEm3u95qq2Y1CQQW1K9tPaMma9iAqUqhpISCmyXrgnlpx9soEmoVNuQpiyGsTpePGumWxSs1YoKziYB6Wz"
 
@@ -93,6 +142,9 @@ checkOS() {
     elif [ -n "$ifMacOS" ]; then
         os_version=MacOS
         is_macos=1
+    elif [ -f /etc/alpine-release ] || grep -qi "alpine" /etc/os-release 2>/dev/null; then
+        os_version=Alpine
+        is_alpine=1
     else
         os_version=$(grep 'VERSION_ID' /etc/os-release | cut -d '"' -f 2 | tr -d '.')
     fi
@@ -102,7 +154,9 @@ checkOS() {
         ssll="-k --ciphers DEFAULT@SECLEVEL=1"
     fi
 
-    if [ "$(which apt 2>/dev/null)" ]; then
+    if [ "$(which apk 2>/dev/null)" ] && [ "$is_alpine" == 1 ]; then
+        InstallMethod="apk"
+    elif [ "$(which apt 2>/dev/null)" ]; then
         InstallMethod="apt"
         is_debian=1
     elif [ "$(which dnf 2>/dev/null)" ] || [ "$(which yum 2>/dev/null)" ]; then
@@ -159,6 +213,10 @@ checkDependencies() {
             elif [ "$is_macos" == 1 ]; then
                 echo -e "${Font_Green}Installing python${Font_Suffix}"
                 $InstallMethod install python
+            elif [ "$is_alpine" == 1 ]; then
+                echo -e "${Font_Green}Installing python3${Font_Suffix}"
+                apk add --no-cache python3 >/dev/null 2>&1
+                alias python="python3"
             fi
         fi
     fi
@@ -179,6 +237,9 @@ checkDependencies() {
         elif [ "$is_macos" == 1 ]; then
             echo -e "${Font_Green}Installing bind${Font_Suffix}"
             $InstallMethod install bind
+        elif [ "$is_alpine" == 1 ]; then
+            echo -e "${Font_Green}Installing bind-tools${Font_Suffix}"
+            apk add --no-cache bind-tools >/dev/null 2>&1
         fi
     fi
 
@@ -186,6 +247,17 @@ checkDependencies() {
         if ! command -v md5sum &>/dev/null; then
             echo -e "${Font_Green}Installing md5sha1sum${Font_Suffix}"
             $InstallMethod install md5sha1sum
+        fi
+    fi
+
+    # Alpine(busybox) 可能缺少 base64 / bash, 检测脚本上报时依赖 base64
+    if [ "$is_alpine" == 1 ]; then
+        if ! command -v base64 &>/dev/null; then
+            echo -e "${Font_Green}Installing coreutils${Font_Suffix}"
+            apk add --no-cache coreutils >/dev/null 2>&1
+        fi
+        if ! command -v bash &>/dev/null; then
+            echo -e "${Font_Yellow}建议安装 bash: apk add bash${Font_Suffix}"
         fi
     fi
 
@@ -216,38 +288,44 @@ MediaUnlockTest_BBCiPLAYER() {
         return
     fi
 
-    if [ -n "$tmpresult" ]; then
-        result=$(echo $tmpresult | grep 'geolocation')
-        if [ -n "$result" ]; then
-            echo -n -e "\r BBC iPLAYER:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
-            modifyJsonTemplate 'BBC_result' 'No'
-        else
-            echo -n -e "\r BBC iPLAYER:\t\t\t\t${Font_Green}Yes${Font_Suffix}\n"
-            modifyJsonTemplate 'BBC_result' 'Yes'
-        fi
-    else
+    if [ -z "$tmpresult" ]; then
         echo -n -e "\r BBC iPLAYER:\t\t\t\t${Font_Red}Failed${Font_Suffix}\n"
         modifyJsonTemplate 'BBC_result' 'Unknow'
+        return
+    fi
+
+    local isBlocked=$(echo "$tmpresult" | grep -i 'geolocation')
+    local isOK=$(echo "$tmpresult" | grep -i 'vs-hls-push-uk')
+
+    if [ -z "$isBlocked" ] && [ -z "$isOK" ]; then
+        echo -n -e "\r BBC iPLAYER:\t\t\t\t${Font_Red}Failed${Font_Suffix}\n"
+        modifyJsonTemplate 'BBC_result' 'Unknow'
+    elif [ -n "$isBlocked" ]; then
+        echo -n -e "\r BBC iPLAYER:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
+        modifyJsonTemplate 'BBC_result' 'No'
+    else
+        echo -n -e "\r BBC iPLAYER:\t\t\t\t${Font_Green}Yes${Font_Suffix}\n"
+        modifyJsonTemplate 'BBC_result' 'Yes'
     fi
 }
 
 MediaUnlockTest_MyTVSuper() {
-    local result=$(curl $useNIC $usePROXY $xForward -s -${1} --max-time 10 "https://www.mytvsuper.com/api/auth/getSession/self/" 2>&1 | python -m json.tool 2>/dev/null | grep 'region' | awk '{print $2}')
+    local tmpresult=$(curl $useNIC $usePROXY $xForward -s -${1} ${ssll} --user-agent "${UA_Browser}" --max-time 10 "https://www.mytvsuper.com/api/auth/getSession/self/" 2>&1)
 
-    if [[ "$result" == "1" ]]; then
-        echo -n -e "\r MyTVSuper:\t\t\t\t${Font_Green}Yes${Font_Suffix}\n"
-        modifyJsonTemplate 'MyTVSuper_result' 'Yes'
-        return
-    else
-        echo -n -e "\r MyTVSuper:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
-        modifyJsonTemplate 'MyTVSuper_result' 'No'
+    if [ -z "$tmpresult" ]; then
+        echo -n -e "\r MyTVSuper:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
+        modifyJsonTemplate 'MyTVSuper_result' 'Unknow'
         return
     fi
 
-    echo -n -e "\r MyTVSuper:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
-    modifyJsonTemplate 'MyTVSuper_result' 'Unknow'
-    return
-
+    local result=$(echo "$tmpresult" | grep_json_value 'country_code')
+    if [ "$result" == 'HK' ]; then
+        echo -n -e "\r MyTVSuper:\t\t\t\t${Font_Green}Yes${Font_Suffix}\n"
+        modifyJsonTemplate 'MyTVSuper_result' 'Yes'
+    else
+        echo -n -e "\r MyTVSuper:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
+        modifyJsonTemplate 'MyTVSuper_result' 'No'
+    fi
 }
 
 MediaUnlockTest_BilibiliHKMCTW() {
@@ -255,7 +333,7 @@ MediaUnlockTest_BilibiliHKMCTW() {
     # 尝试获取成功的结果
     local result=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${1} -fsSL --max-time 10 "https://api.bilibili.com/pgc/player/web/playurl?avid=18281381&cid=29892777&qn=0&type=&otype=json&ep_id=183799&fourk=1&fnver=0&fnval=16&session=${randsession}&module=bangumi" 2>&1)
     if [[ "$result" != "curl"* ]]; then
-        local result="$(echo "${result}" | python -m json.tool 2>/dev/null | grep '"code"' | head -1 | awk '{print $2}' | cut -d ',' -f1)"
+        local result="$(echo "${result}" | grep_json_value 'code')"
         if [ "${result}" = "0" ]; then
             echo -n -e "\r BiliBili Hongkong/Macau/Taiwan:\t${Font_Green}Yes${Font_Suffix}\n"
             modifyJsonTemplate 'BilibiliHKMCTW_result' 'Yes'
@@ -277,7 +355,7 @@ MediaUnlockTest_BilibiliTW() {
     # 尝试获取成功的结果
     local result=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${1} -fsSL --max-time 10 "https://api.bilibili.com/pgc/player/web/playurl?avid=50762638&cid=100279344&qn=0&type=&otype=json&ep_id=268176&fourk=1&fnver=0&fnval=16&session=${randsession}&module=bangumi" 2>&1)
     if [[ "$result" != "curl"* ]]; then
-        local result="$(echo "${result}" | python -m json.tool 2>/dev/null | grep '"code"' | head -1 | awk '{print $2}' | cut -d ',' -f1)"
+        local result="$(echo "${result}" | grep_json_value 'code')"
         if [ "${result}" = "0" ]; then
             echo -n -e "\r Bilibili Taiwan Only:\t\t\t${Font_Green}Yes${Font_Suffix}\n"
             modifyJsonTemplate 'BilibiliTW_result' 'Yes'
@@ -295,52 +373,54 @@ MediaUnlockTest_BilibiliTW() {
 }
 
 MediaUnlockTest_AbemaTV_IPTest() {
-    #
-    local tempresult=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Dalvik}" -${1} -fsL --write-out %{http_code} --max-time 10 "https://api.abema.io/v1/ip/check?device=android" 2>&1)
-    if [[ "$tempresult" == "000" ]]; then
+    local tmpresult=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Android}" -${1} ${ssll} -fsL --max-time 10 "https://api.abema.io/v1/ip/check?device=android" 2>&1)
+    if [ -z "$tmpresult" ]; then
         echo -n -e "\r Abema.TV:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
+        modifyJsonTemplate 'AbemaTV_result' 'Unknow'
         return
     fi
 
-    result=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Dalvik}" -${1} -fsL --max-time 10 "https://api.abema.io/v1/ip/check?device=android" 2>&1 | python -m json.tool 2>/dev/null | grep isoCountryCode | awk '{print $2}' | cut -f2 -d'"')
-    if [ -n "$result" ]; then
-        if [[ "$result" == "JP" ]]; then
-            echo -n -e "\r Abema.TV:\t\t\t\t${Font_Green}Yes${Font_Suffix}\n"
-            modifyJsonTemplate 'AbemaTV_result' 'Yes'
-        else
-            echo -n -e "\r Abema.TV:\t\t\t\t${Font_Yellow}Oversea Only${Font_Suffix}\n"
-            modifyJsonTemplate 'AbemaTV_result' 'Yes' 'Oversea Only'
-        fi
-    else
+    local region=$(echo "$tmpresult" | grep_json_value 'isoCountryCode')
+    if [ -z "$region" ]; then
         echo -n -e "\r Abema.TV:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
         modifyJsonTemplate 'AbemaTV_result' 'No'
+    elif [ "$region" == 'JP' ]; then
+        echo -n -e "\r Abema.TV:\t\t\t\t${Font_Green}Yes${Font_Suffix}\n"
+        modifyJsonTemplate 'AbemaTV_result' 'Yes'
+    else
+        echo -n -e "\r Abema.TV:\t\t\t\t${Font_Yellow}Oversea Only (Region: ${region})${Font_Suffix}\n"
+        modifyJsonTemplate 'AbemaTV_result' 'Yes' 'Oversea Only'
     fi
 }
 
 MediaUnlockTest_Netflix() {
-    local result1=$(curl $useNIC $usePROXY $xForward -${1} --user-agent "${UA_Browser}" -fsL --write-out %{http_code} --output /dev/null --max-time 10 "https://www.netflix.com/title/81280792" 2>&1)
+    # 与上游同步: LEGO Ninjago + Breaking bad, 从页面内容判定是否为自制剧 / 区服
+    local netflix_cookie='flwssn=d2c72c47-49e9-48da-b7a2-2dc6d7ca9fcf; nfvdid=BQFmAAEBEMZa4XMYVzVGf9-kQ1HXumtAKsCyuBZU4QStC6CGEGIVznjNuuTerLAG8v2-9V_kYhg5uxTB5_yyrmqc02U5l1Ts74Qquezc9AE-LZKTo3kY3g%3D%3D; SecureNetflixId=v%3D3%26mac%3DAQEAEQABABSQHKcR1d0sLV0WTu0lL-BO63TKCCHAkeY.%26dt%3D1745376277212; NetflixId=v%3D3%26ct%3DBgjHlOvcAxLAAZuNS4_CJHy9NKJPzUV-9gElzTlTsmDS1B59TycR-fue7f6q7X9JQAOLttD7OnlldUtnYWXL7VUfu9q4pA0gruZKVIhScTYI1GKbyiEqKaULAXOt0PHQzgRLVTNVoXkxcbu7MYG4wm1870fZkd5qrDOEseZv2WIVk4xIeNL87EZh1vS3RZU3e-qWy2tSmfSNUC-FVDGwxbI6-hk3Zg2MbcWYd70-ghohcCSZp5WHAGXg_xWVC7FHM3aOUVTGwRCU1RgGIg4KDKGr_wsTRRw6HWKqeA..; gsid=09bb180e-fbb1-4bf6-adcb-a3fa1236e323'
 
-    if [[ "$result1" == "404" ]]; then
-        modifyJsonTemplate 'Netflix_result' 'No' 'Originals Only'
-        echo -n -e "\r Netflix:\t\t\t\t${Font_Yellow}Originals Only${Font_Suffix}\n"
-        return
-    elif [[ "$result1" == "403" ]]; then
-        echo -n -e "\r Netflix:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
-        modifyJsonTemplate 'Netflix_result' 'No'
-        return
-    elif [[ "$result1" == "200" ]]; then
-        local region=$(curl $useNIC $usePROXY $xForward -${1} --user-agent "${UA_Browser}" -fs --max-time 10 --write-out %{redirect_url} --output /dev/null "https://www.netflix.com/title/80018499" 2>&1 | cut -d '/' -f4 | cut -d '-' -f1 | tr [:lower:] [:upper:])
-        if [[ ! -n "$region" ]]; then
-            region="US"
-        fi
-        echo -n -e "\r Netflix:\t\t\t\t${Font_Green}Yes (Region: ${region})${Font_Suffix}\n"
-        modifyJsonTemplate 'Netflix_result' 'Yes' "${region}"
-        return
-    elif [[ "$result1" == "000" ]]; then
+    local tmpresult1=$(curl $useNIC $usePROXY $xForward -${1} ${ssll} --user-agent "${UA_Browser}" -fsL --max-time 20 'https://www.netflix.com/title/81280792' -H 'accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' -H 'accept-language: en-US,en;q=0.9' -b "${netflix_cookie}" -H "sec-ch-ua: ${UA_SEC_CH_UA}" -H 'sec-ch-ua-mobile: ?0' -H 'sec-ch-ua-platform: "Windows"' -H 'upgrade-insecure-requests: 1' 2>&1)
+    local tmpresult2=$(curl $useNIC $usePROXY $xForward -${1} ${ssll} --user-agent "${UA_Browser}" -fsL --max-time 20 'https://www.netflix.com/title/70143836' -H 'accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' -H 'accept-language: en-US,en;q=0.9' -b "${netflix_cookie}" -H "sec-ch-ua: ${UA_SEC_CH_UA}" -H 'sec-ch-ua-mobile: ?0' -H 'sec-ch-ua-platform: "Windows"' -H 'upgrade-insecure-requests: 1' 2>&1)
+
+    if [ -z "${tmpresult1}" ] || [ -z "${tmpresult2}" ]; then
         echo -n -e "\r Netflix:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
         modifyJsonTemplate 'Netflix_result' 'Unknow'
         return
     fi
+
+    local result1=$(echo ${tmpresult1} | grep 'Oh no!')
+    local result2=$(echo ${tmpresult2} | grep 'Oh no!')
+
+    if [ -n "${result1}" ] && [ -n "${result2}" ]; then
+        echo -n -e "\r Netflix:\t\t\t\t${Font_Yellow}Originals Only${Font_Suffix}\n"
+        modifyJsonTemplate 'Netflix_result' 'No' 'Originals Only'
+        return
+    fi
+
+    local region=$(echo "$tmpresult1" | sed -n 's/.*"id":"\([^"]*\)".*"countryName":"[^"]*".*/\1/p' | head -n 1)
+    if [ -z "${region}" ]; then
+        region="US"
+    fi
+    echo -n -e "\r Netflix:\t\t\t\t${Font_Green}Yes (Region: ${region})${Font_Suffix}\n"
+    modifyJsonTemplate 'Netflix_result' 'Yes' "${region}"
 }
 
 MediaUnlockTest_DisneyPlus() {
@@ -354,47 +434,60 @@ MediaUnlockTest_DisneyPlus() {
         return
     fi
 
-    local assertion=$(echo $PreAssertion | python -m json.tool 2>/dev/null | grep assertion | cut -f4 -d'"')
+    local is403=$(echo "$PreAssertion" | grep -i '403 ERROR')
+    if [ -n "$is403" ]; then
+        echo -n -e "\r Disney+:\t\t\t\t${Font_Red}No (IP Banned By Disney+)${Font_Suffix}\n"
+        modifyJsonTemplate 'DisneyPlus_result' 'No' 'IP Banned'
+        return
+    fi
+
+    local assertion=$(echo "$PreAssertion" | grep_json_value 'assertion')
+    if [ -z "$assertion" ]; then
+        echo -n -e "\r Disney+:\t\t\t\t${Font_Red}Failed${Font_Suffix}\n"
+        modifyJsonTemplate 'DisneyPlus_result' 'Unknow'
+        return
+    fi
+
     local PreDisneyCookie=$(echo "$Media_Cookie" | sed -n '1p')
     local disneycookie=$(echo $PreDisneyCookie | sed "s/DISNEYASSERTION/${assertion}/g")
-    local TokenContent=$(curl $useNIC $usePROXY $xForward -${1} --user-agent "${UA_Browser}" -s --max-time 10 -X POST "https://disney.api.edge.bamgrid.com/token" -H "authorization: Bearer ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84" -d "$disneycookie" 2>&1)
-    local isBanned=$(echo $TokenContent | python -m json.tool 2>/dev/null | grep 'forbidden-location')
-    local is403=$(echo $TokenContent | grep '403 ERROR')
+    local TokenContent=$(curl $useNIC $usePROXY $xForward -${1} ${ssll} --user-agent "${UA_Browser}" -s --max-time 10 -X POST "https://disney.api.edge.bamgrid.com/token" -H "authorization: Bearer ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84" -d "$disneycookie" 2>&1)
+    local isBanned=$(echo "$TokenContent" | grep -i 'forbidden-location')
+    local is403=$(echo "$TokenContent" | grep -i '403 ERROR')
 
     if [ -n "$isBanned" ] || [ -n "$is403" ]; then
-        echo -n -e "\r Disney+:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
-        modifyJsonTemplate 'DisneyPlus_result' 'No'
+        echo -n -e "\r Disney+:\t\t\t\t${Font_Red}No (IP Banned By Disney+)${Font_Suffix}\n"
+        modifyJsonTemplate 'DisneyPlus_result' 'No' 'IP Banned'
         return
     fi
 
     local fakecontent=$(echo "$Media_Cookie" | sed -n '8p')
-    local refreshToken=$(echo $TokenContent | python -m json.tool 2>/dev/null | grep 'refresh_token' | awk '{print $2}' | cut -f2 -d'"')
+    local refreshToken=$(echo "$TokenContent" | grep_json_value 'refresh_token')
     local disneycontent=$(echo $fakecontent | sed "s/ILOVEDISNEY/${refreshToken}/g")
-    local tmpresult=$(curl $useNIC $usePROXY $xForward -${1} --user-agent "${UA_Browser}" -X POST -sSL --max-time 10 "https://disney.api.edge.bamgrid.com/graph/v1/device/graphql" -H "authorization: ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84" -d "$disneycontent" 2>&1)
-    local previewcheck=$(curl $useNIC $usePROXY $xForward -${1} -s -o /dev/null -L --max-time 10 -w '%{url_effective}\n' "https://disneyplus.com" | grep preview)
-    local isUnabailable=$(echo $previewcheck | grep 'unavailable')
-    local region=$(echo $tmpresult | python -m json.tool 2>/dev/null | grep 'countryCode' | cut -f4 -d'"')
-    local inSupportedLocation=$(echo $tmpresult | python -m json.tool 2>/dev/null | grep 'inSupportedLocation' | awk '{print $2}' | cut -f1 -d',')
+    local tmpresult=$(curl $useNIC $usePROXY $xForward -${1} ${ssll} --user-agent "${UA_Browser}" -X POST -sSL --max-time 10 "https://disney.api.edge.bamgrid.com/graph/v1/device/graphql" -H "authorization: ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84" -d "$disneycontent" 2>&1)
+    local previewcheck=$(curl $useNIC $usePROXY $xForward -${1} ${ssll} --user-agent "${UA_Browser}" -s -o /dev/null -L --max-time 10 -w '%{url_effective}\n' "https://disneyplus.com" 2>&1)
+    local isUnavailable=$(echo "$previewcheck" | grep -E 'preview|unavailable')
+    local region=$(echo "$tmpresult" | grep_json_value 'countryCode')
+    local inSupportedLocation=$(echo "$tmpresult" | grep_json_value 'inSupportedLocation')
 
-    if [[ "$region" == "JP" ]]; then
+    if [ -z "$region" ]; then
+        echo -n -e "\r Disney+:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
+        modifyJsonTemplate 'DisneyPlus_result' 'No'
+        return
+    elif [ "$region" == "JP" ]; then
         echo -n -e "\r Disney+:\t\t\t\t${Font_Green}Yes (Region: JP)${Font_Suffix}\n"
         modifyJsonTemplate 'DisneyPlus_result' 'Yes' 'JP'
         return
-    elif [ -n "$region" ] && [[ "$inSupportedLocation" == "false" ]] && [ -z "$isUnabailable" ]; then
-        echo -n -e "\r Disney+:\t\t\t\t${Font_Yellow}Available For [Disney+ $region] Soon${Font_Suffix}\n"
-        modifyJsonTemplate 'DisneyPlus_result' 'No'
-        return
-    elif [ -n "$region" ] && [ -n "$isUnavailable" ]; then
+    elif [ -n "$isUnavailable" ]; then
         echo -n -e "\r Disney+:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
         modifyJsonTemplate 'DisneyPlus_result' 'No'
         return
-    elif [ -n "$region" ] && [[ "$inSupportedLocation" == "true" ]]; then
+    elif [ "$inSupportedLocation" == "false" ]; then
+        echo -n -e "\r Disney+:\t\t\t\t${Font_Yellow}Available For [Disney+ $region] Soon${Font_Suffix}\n"
+        modifyJsonTemplate 'DisneyPlus_result' 'No' "${region}"
+        return
+    elif [ "$inSupportedLocation" == "true" ]; then
         echo -n -e "\r Disney+:\t\t\t\t${Font_Green}Yes (Region: $region)${Font_Suffix}\n"
         modifyJsonTemplate 'DisneyPlus_result' 'Yes' "${region}"
-        return
-    elif [ -z "$region" ]; then
-        echo -n -e "\r Disney+:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
-        modifyJsonTemplate 'DisneyPlus_result' 'No'
         return
     else
         echo -n -e "\r Disney+:\t\t\t\t${Font_Red}Failed${Font_Suffix}\n"
@@ -405,102 +498,119 @@ MediaUnlockTest_DisneyPlus() {
 }
 
 MediaUnlockTest_YouTube_Premium() {
-    local tmpresult=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${1} --max-time 10 -sSL -H "Accept-Language: en" -b "YSC=BiCUU3-5Gdk; CONSENT=YES+cb.20220301-11-p0.en+FX+700; GPS=1; VISITOR_INFO1_LIVE=4VwPMkB7W5A; PREF=tz=Asia.Shanghai; _gcl_au=1.1.1809531354.1646633279" "https://www.youtube.com/premium" 2>&1)
+    local tmpresult=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${1} ${ssll} --max-time 20 -sSL -H 'accept-language: en-US,en;q=0.9' -H 'cookie: YSC=FSCWhKo2Zgw; VISITOR_PRIVACY_METADATA=CgJERRIEEgAgYQ%3D%3D; PREF=f7=4000; __Secure-YEC=CgtRWTBGTFExeV9Iayjele2yBjIKCgJERRIEEgAgYQ%3D%3D; SOCS=CAISOAgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjQwNTI2LjAxX3AwGgV6aC1DTiACGgYIgMnpsgY; VISITOR_INFO1_LIVE=Di84mAIbgKY; __Secure-BUCKET=CGQ' "https://www.youtube.com/premium" 2>&1)
 
-    if [[ "$tmpresult" == "curl"* ]]; then
+    if [ -z "$tmpresult" ]; then
         echo -n -e "\r YouTube Premium:\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
         modifyJsonTemplate 'YouTube_Premium_result' 'Unknow'
         return
     fi
 
-    local isCN=$(echo $tmpresult | grep 'www.google.cn')
+    local isCN=$(echo "$tmpresult" | grep 'www.google.cn')
     if [ -n "$isCN" ]; then
         echo -n -e "\r YouTube Premium:\t\t\t${Font_Red}No${Font_Suffix} ${Font_Green} (Region: CN)${Font_Suffix} \n"
         modifyJsonTemplate 'YouTube_Premium_result' 'No' 'CN'
         return
     fi
-    local isNotAvailable=$(echo $tmpresult | grep 'Premium is not available in your country')
-    local region=$(echo $tmpresult | grep "countryCode" | sed 's/.*"countryCode"//' | cut -f2 -d'"')
-    local isAvailable=$(echo $tmpresult | grep '/month')
+
+    local isNotAvailable=$(echo "$tmpresult" | grep -i 'Premium is not available in your country')
+    local region=$(echo "$tmpresult" | grep_json_value 'INNERTUBE_CONTEXT_GL')
+    local isAvailable=$(echo "$tmpresult" | grep -i 'ad-free')
 
     if [ -n "$isNotAvailable" ]; then
-        echo -n -e "\r YouTube Premium:\t\t\t${Font_Red}No${Font_Suffix} \n"
+        echo -n -e "\r YouTube Premium:\t\t\t${Font_Red}No${Font_Suffix}\n"
         modifyJsonTemplate 'YouTube_Premium_result' 'No'
         return
-    elif [ -n "$isAvailable" ] && [ -n "$region" ]; then
-        echo -n -e "\r YouTube Premium:\t\t\t${Font_Green}Yes (Region: $region)${Font_Suffix}\n"
+    fi
+    if [ -z "$region" ] && [ -n "$isAvailable" ]; then
+        region='UNKNOWN'
+    fi
+    if [ -n "$isAvailable" ]; then
+        echo -n -e "\r YouTube Premium:\t\t\t${Font_Green}Yes (Region: ${region})${Font_Suffix}\n"
         modifyJsonTemplate 'YouTube_Premium_result' 'Yes' "${region}"
         return
-    elif [ -z "$region" ] && [ -n "$isAvailable" ]; then
-        echo -n -e "\r YouTube Premium:\t\t\t${Font_Green}Yes${Font_Suffix}\n"
-        modifyJsonTemplate 'YouTube_Premium_result' 'Yes'
-        return
-    else
-        echo -n -e "\r YouTube Premium:\t\t\t${Font_Red}Failed${Font_Suffix}\n"
-        modifyJsonTemplate 'YouTube_Premium_result' 'Unknow'
     fi
+
+    echo -n -e "\r YouTube Premium:\t\t\t${Font_Red}Failed${Font_Suffix}\n"
+    modifyJsonTemplate 'YouTube_Premium_result' 'Unknow'
 }
 
 ###
- # @Author: Vincent Young
- # @Date: 2023-02-09 17:39:59
- # @LastEditors: Vincent Young
- # @LastEditTime: 2023-02-15 20:54:40
- # @FilePath: /OpenAI-Checker/openai.sh
- # @Telegram: https://t.me/missuo
- #
- # Copyright © 2023 by Vincent, All Rights Reserved.
+
+ # ChatGPT 检测: 同步自上游 lmc999/RegionRestrictionCheck (check.sh WebTest_OpenAI)
+
+ # 原实现参考 https://github.com/missuo/OpenAI-Checker
+
 ###
+
+
 
 OpenAiUnlockTest()
+
 {
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    YELLOW='\033[0;33m'
-    PLAIN='\033[0m'
-    BLUE="\033[36m"
 
-    SUPPORT_COUNTRY=(AL DZ AD AO AG AR AM AU AT AZ BS BD BB BE BZ BJ BT BA BW BR BG BF CV CA CL CO KM CR HR CY DK DJ DM DO EC SV EE FJ FI FR GA GM GE DE GH GR GD GT GN GW GY HT HN HU IS IN ID IQ IE IL IT JM JP JO KZ KE KI KW KG LV LB LS LR LI LT LU MG MW MY MV ML MT MH MR MU MX MC MN ME MA MZ MM NA NR NP NL NZ NI NE NG MK NO OM PK PW PA PG PE PH PL PT QA RO RW KN LC VC WS SM ST SN RS SC SL SG SK SI SB ZA ES LK SR SE CH TH TG TO TT TN TR TV UG AE US UY VU ZM BO BN CG CZ VA FM MD PS KR TW TZ TL GB)
-    echo
-    echo -e "${BLUE}OpenAI Access Checker. Made by Vincent${PLAIN}"
-    echo -e "${BLUE}https://github.com/missuo/OpenAI-Checker${PLAIN}"
-    #echo "-------------------------------------"
-    if [[ $(curl -sS https://chat.openai.com/ -I | grep "text/plain") != "" ]]
-    then
-        echo "Your IP is BLOCKED!"
-    else
-        #echo -e "[IPv4]"
-        # check4=`ping 1.1.1.1 -c 1 2>&1`;
-        # if [[ "$check4" != *"received"* ]] && [[ "$check4" != *"transmitted"* ]];then
-        #     echo -e "\033[34mIPv4 is not supported on the current host. Skip...\033[0m";
-        #     modifyJsonTemplate 'OpenAI_result' 'Unknow'
-        # else
-            # local_ipv4=$(curl -4 -s --max-time 10 api64.ipify.org)
-            #local_ipv4=$(curl -4 -sS https://chat.openai.com/cdn-cgi/trace | grep "ip=" | awk -F= '{print $2}')
-            #local_isp4=$(curl -s -4 --max-time 10  --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.87 Safari/537.36" "https://api.ip.sb/geoip/${local_ipv4}" | grep organization | cut -f4 -d '"')
-            #local_asn4=$(curl -s -4 --max-time 10  --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.87 Safari/537.36" "https://api.ip.sb/geoip/${local_ipv4}" | grep asn | cut -f8 -d ',' | cut -f2 -d ':')
-            #echo -e "${BLUE}Your IPv4: ${local_ipv4} - ${local_isp4}${PLAIN}"
-            iso2_code4=$(curl -4 -sS https://chat.openai.com/cdn-cgi/trace | grep "loc=" | awk -F= '{print $2}')
-            found=0
-            for country in "${SUPPORT_COUNTRY[@]}"
-            do
-                if [[ "${country}" == "${iso2_code4}" ]];
-                then
-                    echo -e "${BLUE}Your IP supports access to OpenAI. Region: ${iso2_code4}${PLAIN}"
-                    modifyJsonTemplate 'OpenAI_result' 'Yes' "${iso2_code4}"
-                    found=1
-                    break
-                fi
-            done
+    local tmpresult1=$(curl $useNIC $usePROXY $xForward -s ${ssll} --max-time 20 'https://api.openai.com/compliance/cookie_requirements' -H 'authority: api.openai.com' -H 'accept: */*' -H 'accept-language: en-US,en;q=0.9' -H 'authorization: Bearer null' -H 'content-type: application/json' -H 'origin: https://platform.openai.com' -H 'referer: https://platform.openai.com/' -H "sec-ch-ua: ${UA_SEC_CH_UA}" -H 'sec-ch-ua-mobile: ?0' -H 'sec-ch-ua-platform: "Windows"' -H 'sec-fetch-dest: empty' -H 'sec-fetch-mode: cors' -H 'sec-fetch-site: same-site' --user-agent "${UA_Browser}" 2>&1)
 
-            if [[ $found -eq 0 ]];
-            then
-                echo -e "${RED}Region: ${iso2_code4}. Not support OpenAI at this time.${PLAIN}"
-                modifyJsonTemplate 'OpenAI_result' 'No'
-            fi
-        # fi
+    local tmpresult2=$(curl $useNIC $usePROXY $xForward -s ${ssll} --max-time 20 'https://ios.chat.openai.com/' -H 'authority: ios.chat.openai.com' -H 'accept: */*;q=0.8,application/signed-exchange;v=b3;q=0.7' -H 'accept-language: en-US,en;q=0.9' -H "sec-ch-ua: ${UA_SEC_CH_UA}" -H 'sec-ch-ua-mobile: ?0' -H 'sec-ch-ua-platform: "Windows"' -H 'sec-fetch-dest: document' -H 'sec-fetch-mode: navigate' -H 'sec-fetch-site: none' -H 'sec-fetch-user: ?1' -H 'upgrade-insecure-requests: 1' --user-agent "${UA_Browser}" 2>&1)
+
+
+
+    if [ -z "$tmpresult1" ] || [ -z "$tmpresult2" ]; then
+
+        echo -n -e "\r ChatGPT:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
+
+        modifyJsonTemplate 'OpenAI_result' 'Unknow'
+
+        return
+
     fi
+
+
+
+    local result1=$(echo "$tmpresult1" | grep -i 'unsupported_country')
+
+    local result2=$(echo "$tmpresult2" | grep -i 'VPN')
+
+
+
+    if [ -z "$result1" ] && [ -z "$result2" ]; then
+
+        echo -n -e "\r ChatGPT:\t\t\t\t${Font_Green}Yes${Font_Suffix}\n"
+
+        modifyJsonTemplate 'OpenAI_result' 'Yes'
+
+        return
+
+    fi
+
+    if [ -n "$result1" ] && [ -n "$result2" ]; then
+
+        echo -n -e "\r ChatGPT:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
+
+        modifyJsonTemplate 'OpenAI_result' 'No'
+
+        return
+
+    fi
+
+    if [ -z "$result1" ] && [ -n "$result2" ]; then
+
+        echo -n -e "\r ChatGPT:\t\t\t\t${Font_Yellow}No (Only Available with Web Browser)${Font_Suffix}\n"
+
+        modifyJsonTemplate 'OpenAI_result' 'No' 'Web Only'
+
+        return
+
+    fi
+
+
+
+    echo -n -e "\r ChatGPT:\t\t\t\t${Font_Yellow}No (Only Available with Mobile APP)${Font_Suffix}\n"
+
+    modifyJsonTemplate 'OpenAI_result' 'No' 'APP Only'
+
 }
+
 
 ###########################################
 #                                         #
@@ -519,7 +629,7 @@ createJsonTemplate() {
     "BBC": "BBC_result",
     "Abema": "AbemaTV_result",
     "OpenAI": "OpenAI_result"
-}' > /root/media_test_tpl.json
+}' > "${CSM_DIR}/media_test_tpl.json"
 }
 
 modifyJsonTemplate() {
@@ -528,9 +638,9 @@ modifyJsonTemplate() {
     region=$3
 
     if [[ "$3" == "" ]]; then
-        sed -i "s#${key_word}#${result}#g" /root/media_test_tpl.json
+        sed -i "s#${key_word}#${result}#g" "${CSM_DIR}/media_test_tpl.json"
     else
-        sed -i "s#${key_word}#${result} (${region})#g" /root/media_test_tpl.json
+        sed -i "s#${key_word}#${result} (${region})#g" "${CSM_DIR}/media_test_tpl.json"
     fi
 }
 
@@ -538,10 +648,12 @@ setCronTask() {
     addTask() {
         execution_time_interval=$1
 
-        crontab -l >/root/crontab.list
-        echo "0 */${execution_time_interval} * * * /bin/bash /root/csm.sh" >>/root/crontab.list
-        crontab /root/crontab.list
-        rm -rf /root/crontab.list
+        local bash_bin
+        bash_bin="$(command -v bash 2>/dev/null || echo /bin/bash)"
+        crontab -l >"${CSM_DIR}/crontab.list"
+        echo "0 */${execution_time_interval} * * * ${bash_bin} ${CSM_DIR}/csm.sh" >>"${CSM_DIR}/crontab.list"
+        crontab "${CSM_DIR}/crontab.list"
+        rm -rf "${CSM_DIR}/crontab.list"
         echo -e "$(green) The scheduled task is added successfully."
     }
 
@@ -597,36 +709,36 @@ checkConfig() {
             exit
         fi
 
-        echo "${panel_address}" > /root/.csm.config
-        echo "${mu_key}" >> /root/.csm.config
-        echo "${node_id}" >> /root/.csm.config
+        echo "${panel_address}" > "${CSM_DIR}/.csm.config"
+        echo "${mu_key}" >> "${CSM_DIR}/.csm.config"
+        echo "${node_id}" >> "${CSM_DIR}/.csm.config"
     }
 
-    if [[ ! -e "/root/.csm.config" ]];then
+    if [[ ! -e "${CSM_DIR}/.csm.config" ]];then
         getConfig
     fi
 }
 
 postData() {
-    if [[ ! -e "/root/.csm.config" ]];then
+    if [[ ! -e "${CSM_DIR}/.csm.config" ]];then
         echo -e "$(red) Missing configuration file."
         exit
     fi
-    if [[ ! -e "/root/media_test_tpl.json" ]];then
+    if [[ ! -e "${CSM_DIR}/media_test_tpl.json" ]];then
         echo -e "$(red) Missing detection report."
         exit
     fi
 
-    panel_address=$(sed -n 1p /root/.csm.config)
-    mu_key=$(sed -n 2p /root/.csm.config)
-    node_id=$(sed -n 3p /root/.csm.config)
+    panel_address=$(sed -n 1p "${CSM_DIR}/.csm.config")
+    mu_key=$(sed -n 2p "${CSM_DIR}/.csm.config")
+    node_id=$(sed -n 3p "${CSM_DIR}/.csm.config")
 
-    curl -s -X POST -d "content=$(cat /root/media_test_tpl.json | base64 | xargs echo -n | sed 's# ##g')" "${panel_address}/mod_mu/media/save_report?key=${mu_key}&node_id=${node_id}" > /root/.csm.response
-    if [[ "$(cat /root/.csm.response)" != "ok" ]];then
-        curl -s -X POST -d "content=$(cat /root/media_test_tpl.json | base64 | xargs echo -n | sed 's# ##g')" "${panel_address}/mod_mu/media/saveReport?key=${mu_key}&node_id=${node_id}" > /root/.csm.response
+    curl -s -X POST -d "content=$(cat "${CSM_DIR}/media_test_tpl.json" | base64 | xargs echo -n | sed 's# ##g')" "${panel_address}/mod_mu/media/save_report?key=${mu_key}&node_id=${node_id}" > "${CSM_DIR}/.csm.response"
+    if [[ "$(cat "${CSM_DIR}/.csm.response")" != "ok" ]];then
+        curl -s -X POST -d "content=$(cat "${CSM_DIR}/media_test_tpl.json" | base64 | xargs echo -n | sed 's# ##g')" "${panel_address}/mod_mu/media/saveReport?key=${mu_key}&node_id=${node_id}" > "${CSM_DIR}/.csm.response"
     fi
 
-    rm -rf /root/media_test_tpl.json /root/.csm.response
+    rm -rf "${CSM_DIR}/media_test_tpl.json" "${CSM_DIR}/.csm.response"
 }
 
 printInfo() {
@@ -636,9 +748,10 @@ printInfo() {
     echo
     echo -e "${green_start}The code for this script to detect streaming media unlocking is all from the open source project https://github.com/lmc999/RegionRestrictionCheck , and the open source protocol is AGPL-3.0. This script is open source as required by the open source license. Thanks to the original author @lmc999 and everyone who made the pull request for this project for their contributions.${color_end}"
     echo
-    echo -e "${green_start}Project: https://github.com/iamsaltedfish/check-stream-media${color_end}"
-    echo -e "${green_start}Version: 2023-08-07 v.2.0.1${color_end}"
-    echo -e "${green_start}Author: @iamsaltedfish${color_end}"
+    echo -e "${green_start}Project: https://github.com/RyanRaw/check-stream-media-forsspanel${color_end}"
+    echo -e "${green_start}Version: 2026-09-21 v.2.1.0${color_end}"
+    echo -e "${green_start}Detect logic synced with upstream check.sh v1.0.1${color_end}"
+    echo -e "${green_start}Author: @iamsaltedfish, fork by @RyanRaw${color_end}"
 }
 
 runCheck() {
@@ -658,7 +771,7 @@ checkData()
 {
     counter=0
     max_check_num=3
-    cat /root/media_test_tpl.json | grep "_result" > /dev/null
+    cat "${CSM_DIR}/media_test_tpl.json" | grep "_result" > /dev/null
     until [ $? != '0' ]  || [[ ${counter} -ge ${max_check_num} ]]
     do
         sleep 1
