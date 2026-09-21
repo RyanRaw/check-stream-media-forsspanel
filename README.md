@@ -7,6 +7,16 @@ The code for this script to detect streaming media unlocking is all from the ope
 
 另参考 [xykt/IPQuality](https://github.com/xykt/IPQuality) 补充了 TikTok / Amazon Prime Video / Reddit 三项解锁检测，并采用其 `contentRegion`、`currentTerritory`、`country` 等信息更详细的区服判据。
 
+同时新增三列 IP 维度信息（面板动态渲染，无需改动面板前端）：
+
+| 列名 | 含义 | 取值示例 | 数据来源 |
+| --- | --- | --- | --- |
+| `UnlockType` | DNS 是否被劫持/污染（IPQuality 的 Native 判定） | `Native` / `DNS Hijack (netflix.com)` | `dig` / `nslookup` 解析随机子域 |
+| `IPType` | IP 属性 | `Hosting` / `ISP` / `Mobile` / `Business`，代理类会附加 `(VPN, Proxy, Tor)` | `ipinfo.io/widget/demo`，失败回退 `ip-api.com` |
+| `IPRisk` | 定性风险等级 | `Low` / `Medium`（机房）/ `High`（VPN/代理/Tor） | 由 `hosting/proxy/vpn/tor` 推导 |
+
+`UnlockType` 与 `IPRisk` 均为纯本地判定，不依赖第三方接口；`IPType` 需要一次外部查询，接口不可用时该列写 `Unknow`，不影响其余检测与上报。
+
 # How to use
 
 ## 一键安装（推荐）

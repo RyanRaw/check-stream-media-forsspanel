@@ -693,6 +693,125 @@ MediaUnlockTest_Reddit() {
 
 ###########################################
 #                                         #
+#   ip attribute check (ref: IPQuality)   #
+#                                         #
+###########################################
+
+# 域名解析: dig 优先, 回退 nslookup
+dnsLookup() {
+    if command -v dig >/dev/null 2>&1; then
+        dig +short "$1" 2>/dev/null | head -n 1
+        return
+    fi
+    if command -v nslookup >/dev/null 2>&1; then
+        nslookup "$1" 2>/dev/null | awk '/^Name:/{f=1;next} f && /^Address/{print $NF; exit}'
+    fi
+}
+
+# 与 IPQuality 的 Get_Unlock_Type 一致: 随机子域若被解析出结果, 说明 DNS 被劫持/污染
+MediaUnlockTest_UnlockType() {
+    local domains="netflix.com www.youtube.com"
+    local bad="" d answer
+    for d in ${domains}; do
+        answer=$(dnsLookup "test${RANDOM}${RANDOM}.${d}")
+        if [ -n "${answer}" ]; then
+            bad="${bad}${bad:+, }${d}"
+        fi
+    done
+
+    if [ -z "${bad}" ]; then
+        echo -n -e "\r Unlock Type:\t\t\t\t${Font_Green}Native${Font_Suffix}\n"
+        modifyJsonTemplate 'UnlockType_result' 'Native'
+    else
+        echo -n -e "\r Unlock Type:\t\t\t\t${Font_Yellow}DNS Hijack${Font_Suffix} ${Font_SkyBlue}(${bad})${Font_Suffix}\n"
+        modifyJsonTemplate 'UnlockType_result' 'DNS Hijack' "${bad}"
+    fi
+}
+
+# IP 属性与定性风险: ipinfo.io widget(无需 token) 优先, 失败回退 ip-api.com(无需 key)
+MediaUnlockTest_IPAttribute() {
+    local ip="${local_ipv4}"
+    [ -z "${ip}" ] && ip="${local_ipv6}"
+
+    local resp asn_type="" hosting="" vpn="" proxy="" tor="" mobile="" ok=0
+
+    if [ -n "${ip}" ]; then
+        resp=$(curl -s --max-time 10 --user-agent "${UA_Browser}" "https://ipinfo.io/widget/demo/${ip}" 2>&1)
+        if echo "${resp}" | grep -q '"privacy"'; then
+            ok=1
+            asn_type=$(echo "${resp}" | grep_json_value 'type')
+            hosting=$(echo "${resp}" | grep_json_value 'hosting')
+            vpn=$(echo "${resp}" | grep_json_value 'vpn')
+            proxy=$(echo "${resp}" | grep_json_value 'proxy')
+            tor=$(echo "${resp}" | grep_json_value 'tor')
+            mobile=$(echo "${resp}" | grep_json_value 'is_mobile')
+        else
+            resp=$(curl -s --max-time 10 "http://ip-api.com/json/${ip}?fields=status,proxy,hosting,mobile" 2>&1)
+            if echo "${resp}" | grep -q '"status":"success"'; then
+                ok=1
+                hosting=$(echo "${resp}" | grep_json_value 'hosting')
+                proxy=$(echo "${resp}" | grep_json_value 'proxy')
+                mobile=$(echo "${resp}" | grep_json_value 'mobile')
+                if [ "${hosting}" = "true" ]; then
+                    asn_type="hosting"
+                elif [ "${mobile}" = "true" ]; then
+                    asn_type="mobile"
+                else
+                    asn_type="isp"
+                fi
+            fi
+        fi
+    fi
+
+    if [ "${ok}" != "1" ]; then
+        echo -n -e "\r IP Type:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
+        echo -n -e "\r IP Risk:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
+        modifyJsonTemplate 'IPType_result' 'Unknow'
+        modifyJsonTemplate 'IPRisk_result' 'Unknow'
+        return
+    fi
+
+    local iptype="Other"
+    case "${asn_type}" in
+        hosting) iptype="Hosting" ;;
+        isp) iptype="ISP" ;;
+        business) iptype="Business" ;;
+        education) iptype="Education" ;;
+        government) iptype="Government" ;;
+    esac
+    if [ "${mobile}" = "true" ] && [ "${asn_type}" != "hosting" ]; then
+        iptype="Mobile"
+    fi
+
+    local tags=""
+    [ "${vpn}" = "true" ] && tags="${tags}${tags:+, }VPN"
+    [ "${proxy}" = "true" ] && tags="${tags}${tags:+, }Proxy"
+    [ "${tor}" = "true" ] && tags="${tags}${tags:+, }Tor"
+
+    local risk="Low"
+    if [ "${tor}" = "true" ] || [ "${proxy}" = "true" ] || [ "${vpn}" = "true" ]; then
+        risk="High"
+    elif [ "${hosting}" = "true" ]; then
+        risk="Medium"
+    fi
+
+    local color="${Font_Green}"
+    [ "${risk}" = "Medium" ] && color="${Font_Yellow}"
+    [ "${risk}" = "High" ] && color="${Font_Red}"
+
+    modifyJsonTemplate 'IPType_result' "${iptype}" "${tags}"
+    modifyJsonTemplate 'IPRisk_result' "${risk}"
+
+    if [ -n "${tags}" ]; then
+        echo -n -e "\r IP Type:\t\t\t\t${color}${iptype} (${tags})${Font_Suffix}\n"
+    else
+        echo -n -e "\r IP Type:\t\t\t\t${color}${iptype}${Font_Suffix}\n"
+    fi
+    echo -n -e "\r IP Risk:\t\t\t\t${color}${risk}${Font_Suffix}\n"
+}
+
+###########################################
+#                                         #
 #   sspanel unlock check function code    #
 #                                         #
 ###########################################
@@ -710,7 +829,10 @@ createJsonTemplate() {
     "OpenAI": "OpenAI_result",
     "TikTok": "TikTok_result",
     "AmazonPV": "AmazonPV_result",
-    "Reddit": "Reddit_result"
+    "Reddit": "Reddit_result",
+    "UnlockType": "UnlockType_result",
+    "IPType": "IPType_result",
+    "IPRisk": "IPRisk_result"
 }' > "${CSM_DIR}/media_test_tpl.json"
 }
 
@@ -831,7 +953,7 @@ printInfo() {
     echo -e "${green_start}The code for this script to detect streaming media unlocking is all from the open source project https://github.com/lmc999/RegionRestrictionCheck , and the open source protocol is AGPL-3.0. This script is open source as required by the open source license. Thanks to the original author @lmc999 and everyone who made the pull request for this project for their contributions.${color_end}"
     echo
     echo -e "${green_start}Project: https://github.com/RyanRaw/check-stream-media-forsspanel${color_end}"
-    echo -e "${green_start}Version: 2026-09-21 v.2.1.0${color_end}"
+    echo -e "${green_start}Version: 2026-09-21 v.2.2.0${color_end}"
     echo -e "${green_start}Detect logic synced with upstream check.sh v1.0.1${color_end}"
     echo -e "${green_start}Extra checks (TikTok / Amazon Prime Video / Reddit) ref: https://github.com/xykt/IPQuality${color_end}"
     echo -e "${green_start}Author: @iamsaltedfish, fork by @RyanRaw${color_end}"
@@ -851,6 +973,8 @@ runCheck() {
     MediaUnlockTest_TikTok 4
     MediaUnlockTest_PrimeVideo 4
     MediaUnlockTest_Reddit 4
+    MediaUnlockTest_UnlockType
+    MediaUnlockTest_IPAttribute
 }
 
 checkData()
