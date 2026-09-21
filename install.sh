@@ -13,7 +13,7 @@
 #
 # 用法:
 #   bash install.sh
-#   bash install.sh -a https://demo.sspanel.org -k <mu_key> -n <node_id> -i 1
+#   bash install.sh -a https://demo.sspanel.org -k <mu_key> -n <node_id> -t <node_token> -i 1
 # ==============================================================================
 
 set -u
@@ -44,6 +44,7 @@ CSM_CONFIG="${CSM_DIR}/.csm.config"
 PANEL_ADDRESS=""
 MU_KEY=""
 NODE_ID=""
+NODE_TOKEN=""
 INTERVAL=""
 
 info() { echo -e "${Font_Green}${1}${Font_Suffix}"; }
@@ -56,8 +57,9 @@ usage() {
 用法: bash install.sh [选项]
 
   -a <面板地址>    例如: https://demo.sspanel.org
-  -k <mu key>      节点通讯密钥
+  -k <mu key>      节点通讯密钥 (URL 参数 key)
   -n <节点 ID>     面板中的节点 ID
+  -t <node token>  X-Node-Token, 留空时上报使用 mu key
   -i <间隔小时>    定时检测间隔, 1-24, 默认 1
   -d <安装目录>    csm.sh 安装位置, 默认 \$HOME
   -h               显示本帮助
@@ -66,11 +68,12 @@ usage() {
 EOF
 }
 
-while getopts ":a:k:n:i:d:h" opt; do
+while getopts ":a:k:n:t:i:d:h" opt; do
     case "${opt}" in
         a) PANEL_ADDRESS="${OPTARG%/}" ;;
         k) MU_KEY="${OPTARG}" ;;
         n) NODE_ID="${OPTARG}" ;;
+        t) NODE_TOKEN="${OPTARG}" ;;
         i) INTERVAL="${OPTARG}" ;;
         d) CSM_DIR="${OPTARG}" ;;
         h) usage; exit 0 ;;
@@ -215,6 +218,7 @@ downloadCsm() {
 writeConfig() {
     if [ -e "${CSM_CONFIG}" ]; then
         info "配置文件已存在: ${CSM_CONFIG} (如需修改请直接编辑该文件)"
+        info "格式: 第 1 行面板地址, 第 2 行 mu key, 第 3 行节点 ID, 第 4 行 X-Node-Token (可留空)"
         return
     fi
 
@@ -228,6 +232,9 @@ writeConfig() {
     while [ -z "${NODE_ID}" ]; do
         read -r -p "$(input '请输入节点 ID:')" NODE_ID
     done
+    if [ -z "${NODE_TOKEN}" ]; then
+        read -r -p "$(input '请输入 X-Node-Token (可选, 直接回车则上报时使用 mu key):')" NODE_TOKEN
+    fi
 
     local resp
     resp="$(curl -s --max-time 15 "${PANEL_ADDRESS}/mod_mu/nodes?key=${MU_KEY}")"
@@ -236,7 +243,7 @@ writeConfig() {
         exit 1
     fi
 
-    printf '%s\n%s\n%s\n' "${PANEL_ADDRESS}" "${MU_KEY}" "${NODE_ID}" >"${CSM_CONFIG}"
+    printf '%s\n%s\n%s\n%s\n' "${PANEL_ADDRESS}" "${MU_KEY}" "${NODE_ID}" "${NODE_TOKEN}" >"${CSM_CONFIG}"
     chmod 600 "${CSM_CONFIG}"
     info "配置已写入: ${CSM_CONFIG}"
 }

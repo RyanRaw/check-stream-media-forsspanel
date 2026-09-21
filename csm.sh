@@ -720,9 +720,11 @@ MediaUnlockTest_UnlockType() {
     done
 
     if [ -z "${bad}" ]; then
+        UNLOCK_TYPE="native"
         echo -n -e "\r Unlock Type:\t\t\t\t${Font_Green}Native${Font_Suffix}\n"
         modifyJsonTemplate 'UnlockType_result' 'Native'
     else
+        UNLOCK_TYPE="dns"
         echo -n -e "\r Unlock Type:\t\t\t\t${Font_Yellow}DNS Hijack${Font_Suffix} ${Font_SkyBlue}(${bad})${Font_Suffix}\n"
         modifyJsonTemplate 'UnlockType_result' 'DNS Hijack' "${bad}"
     fi
@@ -818,34 +820,77 @@ MediaUnlockTest_IPAttribute() {
 
 createJsonTemplate() {
     echo '{
-    "YouTube": "YouTube_Premium_result",
-    "Netflix": "Netflix_result",
-    "DisneyPlus": "DisneyPlus_result",
-    "BilibiliHKMCTW": "BilibiliHKMCTW_result",
-    "BilibiliTW": "BilibiliTW_result",
-    "MyTVSuper": "MyTVSuper_result",
-    "BBC": "BBC_result",
-    "Abema": "AbemaTV_result",
-    "OpenAI": "OpenAI_result",
-    "TikTok": "TikTok_result",
-    "AmazonPV": "AmazonPV_result",
-    "Reddit": "Reddit_result",
+    "YouTube": YouTube_Premium_result,
+    "Netflix": Netflix_result,
+    "DisneyPlus": DisneyPlus_result,
+    "BilibiliHKMCTW": BilibiliHKMCTW_result,
+    "BilibiliTW": BilibiliTW_result,
+    "MyTVSuper": MyTVSuper_result,
+    "BBC": BBC_result,
+    "Abema": AbemaTV_result,
+    "OpenAI": OpenAI_result,
+    "TikTok": TikTok_result,
+    "AmazonPV": AmazonPV_result,
+    "Reddit": Reddit_result,
     "UnlockType": "UnlockType_result",
     "IPType": "IPType_result",
     "IPRisk": "IPRisk_result"
 }' > "${CSM_DIR}/media_test_tpl.json"
 }
 
+# 上报值转换:
+#   流媒体项 -> 对象 {"status":"yes","region":"MY","type":"native"}
+#   UnlockType / IPType / IPRisk -> 字符串
 modifyJsonTemplate() {
-    key_word=$1
-    result=$2
-    region=$3
+    local key_word=$1
+    local result=$2
+    local region=$3
+    local value=""
 
-    if [[ "$3" == "" ]]; then
-        sed -i "s#${key_word}#${result}#g" "${CSM_DIR}/media_test_tpl.json"
-    else
-        sed -i "s#${key_word}#${result} (${region})#g" "${CSM_DIR}/media_test_tpl.json"
-    fi
+    case "${key_word}" in
+        UnlockType_result | IPType_result | IPRisk_result)
+            # 模板中这三项本身已带引号, 此处只替换引号内的内容
+            if [[ "${region}" == "" ]]; then
+                value="${result}"
+            else
+                value="${result} (${region})"
+            fi
+            ;;
+        *)
+            local status=""
+            case "${result}" in
+                Yes) status="yes" ;;
+                No) status="no" ;;
+                Unknow) status="unknown" ;;
+                *) status="$(echo "${result}" | tr '[:upper:]' '[:lower:]')" ;;
+            esac
+
+            # 兼容旧调用的描述性参数, 统一为面板端约定的取值
+            case "${region}" in
+                "Oversea Only") region="oversea" ;;
+                "Originals Only") region="originals" ;;
+                "IP Banned") region="banned" ;;
+                "Web Only") region="web" ;;
+                "APP Only") region="app" ;;
+            esac
+
+            # Disney+ 的 "即将上线" 分支: No + 区服
+            if [[ "${key_word}" == "DisneyPlus_result" ]] && [[ "${status}" == "no" ]] && [[ "${region}" != "" ]] && [[ "${region}" != "banned" ]]; then
+                status="soon"
+            fi
+
+            value="{\"status\":\"${status}\""
+            if [[ "${region}" != "" ]]; then
+                value="${value},\"region\":\"${region}\""
+            fi
+            if [[ "${UNLOCK_TYPE:-}" != "" ]]; then
+                value="${value},\"type\":\"${UNLOCK_TYPE}\""
+            fi
+            value="${value}}"
+            ;;
+    esac
+
+    sed -i "s#${key_word}#${value}#g" "${CSM_DIR}/media_test_tpl.json"
 }
 
 setCronTask() {
@@ -901,6 +946,7 @@ checkConfig() {
         read -p "$(blue) Please enter the panel address (eg: https://demo.sspanel.org):" panel_address
         read -p "$(blue) Please enter the mu key:" mu_key
         read -p "$(blue) Please enter the node id:" node_id
+        read -p "$(blue) Please enter the X-Node-Token (optional, press enter to use mu key):" node_token
 
         if [[ "${panel_address}" = "" ]] || [[ "${mu_key}" = "" ]];then
             echo -e "$(red) Complete all necessary parameter entries."
@@ -916,6 +962,7 @@ checkConfig() {
         echo "${panel_address}" > "${CSM_DIR}/.csm.config"
         echo "${mu_key}" >> "${CSM_DIR}/.csm.config"
         echo "${node_id}" >> "${CSM_DIR}/.csm.config"
+        echo "${node_token}" >> "${CSM_DIR}/.csm.config"
     }
 
     if [[ ! -e "${CSM_DIR}/.csm.config" ]];then
@@ -936,10 +983,24 @@ postData() {
     panel_address=$(sed -n 1p "${CSM_DIR}/.csm.config")
     mu_key=$(sed -n 2p "${CSM_DIR}/.csm.config")
     node_id=$(sed -n 3p "${CSM_DIR}/.csm.config")
+    node_token=$(sed -n 4p "${CSM_DIR}/.csm.config")
+    # 旧配置没有第 4 行时, X-Node-Token 回退使用 mu key
+    [[ -z "${node_token}" ]] && node_token="${mu_key}"
 
-    curl -s -X POST -d "content=$(cat "${CSM_DIR}/media_test_tpl.json" | base64 | xargs echo -n | sed 's# ##g')" "${panel_address}/mod_mu/media/save_report?key=${mu_key}&node_id=${node_id}" > "${CSM_DIR}/.csm.response"
+    local content
+    content=$(cat "${CSM_DIR}/media_test_tpl.json" | base64 | xargs echo -n | sed 's# ##g')
+
+    # 鉴权: URL 查询参数 key 必填(面板不读请求头); 同时附带节点 X-Node-Token 头
+    # content 用 --data-urlencode 提交, base64 中的 + 会被正确编码并在面板侧还原
+    curl -s -X POST \
+        -H "X-Node-Token: ${node_token}" \
+        --data-urlencode "content=${content}" \
+        "${panel_address}/mod_mu/media/save_report?key=${mu_key}&node_id=${node_id}" > "${CSM_DIR}/.csm.response"
     if [[ "$(cat "${CSM_DIR}/.csm.response")" != "ok" ]];then
-        curl -s -X POST -d "content=$(cat "${CSM_DIR}/media_test_tpl.json" | base64 | xargs echo -n | sed 's# ##g')" "${panel_address}/mod_mu/media/saveReport?key=${mu_key}&node_id=${node_id}" > "${CSM_DIR}/.csm.response"
+        curl -s -X POST \
+            -H "X-Node-Token: ${node_token}" \
+            --data-urlencode "content=${content}" \
+            "${panel_address}/mod_mu/media/saveReport?key=${mu_key}&node_id=${node_id}" > "${CSM_DIR}/.csm.response"
     fi
 
     rm -rf "${CSM_DIR}/media_test_tpl.json" "${CSM_DIR}/.csm.response"
@@ -953,7 +1014,7 @@ printInfo() {
     echo -e "${green_start}The code for this script to detect streaming media unlocking is all from the open source project https://github.com/lmc999/RegionRestrictionCheck , and the open source protocol is AGPL-3.0. This script is open source as required by the open source license. Thanks to the original author @lmc999 and everyone who made the pull request for this project for their contributions.${color_end}"
     echo
     echo -e "${green_start}Project: https://github.com/RyanRaw/check-stream-media-forsspanel${color_end}"
-    echo -e "${green_start}Version: 2026-09-21 v.2.2.0${color_end}"
+    echo -e "${green_start}Version: 2026-09-21 v.2.3.0${color_end}"
     echo -e "${green_start}Detect logic synced with upstream check.sh v1.0.1${color_end}"
     echo -e "${green_start}Extra checks (TikTok / Amazon Prime Video / Reddit) ref: https://github.com/xykt/IPQuality${color_end}"
     echo -e "${green_start}Author: @iamsaltedfish, fork by @RyanRaw${color_end}"
@@ -961,6 +1022,8 @@ printInfo() {
 
 runCheck() {
     createJsonTemplate
+    # 先判定 DNS 解锁方式(native/dns), 供后续各项上报的 type 字段使用
+    MediaUnlockTest_UnlockType
     MediaUnlockTest_BBCiPLAYER 4
     MediaUnlockTest_MyTVSuper 4
     MediaUnlockTest_BilibiliHKMCTW 4
@@ -973,7 +1036,6 @@ runCheck() {
     MediaUnlockTest_TikTok 4
     MediaUnlockTest_PrimeVideo 4
     MediaUnlockTest_Reddit 4
-    MediaUnlockTest_UnlockType
     MediaUnlockTest_IPAttribute
 }
 
