@@ -12,10 +12,10 @@ The code for this script to detect streaming media unlocking is all from the ope
 | 列名 | 含义 | 取值示例 | 数据来源 |
 | --- | --- | --- | --- |
 | `UnlockType` | DNS 是否被劫持/污染（IPQuality 的 Native 判定） | `Native` / `DNS Hijack (netflix.com)` | `dig` / `nslookup` 解析随机子域 |
-| `IPType` | IP 属性 | `Hosting` / `ISP` / `Mobile` / `Business`，代理类会附加 `(VPN, Proxy, Tor)` | `ipinfo.io/widget/demo`，失败回退 `ip-api.com` |
-| `IPRisk` | 定性风险等级 | `Low` / `Medium`（机房）/ `High`（VPN/代理/Tor） | 由 `hosting/proxy/vpn/tor` 推导 |
+| `IPType` | IP 属性 | `Hosting` / `ISP` / `Mobile` / `Business`，代理类会附加 `(VPN, Proxy, Tor)` | `ipinfo.io/widget/demo`，依次回退 `ip-api.com`（仅 IPv4）、`ip.sb`（仅运营商名） |
+| `IPRisk` | 定性风险等级 | `Low` / `Medium`（机房）/ `High`（VPN/代理/Tor）/ `unknown`（仅兜底源可用） | 由 `hosting/proxy/vpn/tor` 推导 |
 
-`UnlockType` 与 `IPRisk` 均为纯本地判定，不依赖第三方接口；`IPType` 需要一次外部查询，接口不可用时该列写 `Unknow`，不影响其余检测与上报。
+出口 IP 由 `api64.ipify.org`、`api.ip.sb`、`ipinfo.io/ip`、`ifconfig.me`、`ip-api.com` 多源兜底获取（IPv4 优先，失败再试 IPv6）。`UnlockType` 与 `IPRisk` 均为纯本地判定，不依赖第三方接口；`IPType` 需要一次外部查询，所有数据源都不可用时这两列写 `Unknow`，不影响其余检测与上报。
 
 # 上报格式
 

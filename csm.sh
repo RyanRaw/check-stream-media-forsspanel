@@ -737,15 +737,42 @@ MediaUnlockTest_UnlockType() {
     fi
 }
 
-# IP 属性与定性风险: ipinfo.io widget(无需 token) 优先, 失败回退 ip-api.com(无需 key)
+# 出口 IP 多源兜底(部分节点访问单一接口会失败)
+getPublicIP() {
+    local ip=""
+    local src
+    for src in "https://api64.ipify.org" "https://api.ip.sb/ip" "https://ipinfo.io/ip" "https://ifconfig.me/ip" "http://ip-api.com/line?fields=query"; do
+        ip=$(curl -s -${1:-4} ${ssll} --max-time 8 "${src}" 2>/dev/null | tr -d '\r\n ')
+        if [ -n "${ip}" ] && echo "${ip}" | grep -Eq '^[0-9a-fA-F:.]{7,45}$'; then
+            echo "${ip}"
+            return
+        fi
+    done
+    echo ""
+}
+
+# IP 属性与定性风险:
+#   源1 ipinfo.io widget(无需 token) -> 源2 ip-api.com(免费, IPv4) -> 源3 ip.sb(仅运营商信息)
 MediaUnlockTest_IPAttribute() {
     local ip="${local_ipv4}"
-    [ -z "${ip}" ] && ip="${local_ipv6}"
+    if [ -z "${ip}" ]; then
+        ip=$(getPublicIP 4)
+    fi
+    local family=4
+    if [ -z "${ip}" ]; then
+        ip="${local_ipv6}"
+        family=6
+    fi
+    if [ -z "${ip}" ]; then
+        ip=$(getPublicIP 6)
+        family=6
+    fi
 
     local resp asn_type="" hosting="" vpn="" proxy="" tor="" mobile="" ok=0
 
     if [ -n "${ip}" ]; then
-        resp=$(curl -s --max-time 10 --user-agent "${UA_Browser}" "https://ipinfo.io/widget/demo/${ip}" 2>&1)
+        # 源1: ipinfo.io widget
+        resp=$(curl -s --max-time 10 -${family} ${ssll} --user-agent "${UA_Browser}" "https://ipinfo.io/widget/demo/${ip}" 2>/dev/null)
         if echo "${resp}" | grep -q '"privacy"'; then
             ok=1
             asn_type=$(echo "${resp}" | grep_json_value 'type')
@@ -754,25 +781,37 @@ MediaUnlockTest_IPAttribute() {
             proxy=$(echo "${resp}" | grep_json_value 'proxy')
             tor=$(echo "${resp}" | grep_json_value 'tor')
             mobile=$(echo "${resp}" | grep_json_value 'is_mobile')
-        else
-            resp=$(curl -s --max-time 10 "http://ip-api.com/json/${ip}?fields=status,proxy,hosting,mobile" 2>&1)
-            if echo "${resp}" | grep -q '"status":"success"'; then
-                ok=1
-                hosting=$(echo "${resp}" | grep_json_value 'hosting')
-                proxy=$(echo "${resp}" | grep_json_value 'proxy')
-                mobile=$(echo "${resp}" | grep_json_value 'mobile')
-                if [ "${hosting}" = "true" ]; then
-                    asn_type="hosting"
-                elif [ "${mobile}" = "true" ]; then
-                    asn_type="mobile"
-                else
-                    asn_type="isp"
-                fi
+        fi
+    fi
+
+    if [ "${ok}" != "1" ] && [ -n "${ip}" ] && [ "${family}" = "4" ]; then
+        # 源2: ip-api.com 免费接口(仅 IPv4)
+        resp=$(curl -s --max-time 10 -4 ${ssll} "http://ip-api.com/json/${ip}?fields=status,proxy,hosting,mobile" 2>/dev/null)
+        if echo "${resp}" | grep -q '"status":"success"'; then
+            ok=1
+            hosting=$(echo "${resp}" | grep_json_value 'hosting')
+            proxy=$(echo "${resp}" | grep_json_value 'proxy')
+            mobile=$(echo "${resp}" | grep_json_value 'mobile')
+            if [ "${hosting}" = "true" ]; then
+                asn_type="hosting"
+            elif [ "${mobile}" = "true" ]; then
+                asn_type="mobile"
+            else
+                asn_type="isp"
             fi
         fi
     fi
 
-    if [ "${ok}" != "1" ]; then
+    if [ "${ok}" != "1" ] && [ -n "${ip}" ]; then
+        # 源3: ip.sb 兜底, 只能拿到运营商/组织
+        resp=$(curl -s --max-time 10 -${family} ${ssll} --user-agent "${UA_Browser}" "https://api.ip.sb/geoip/${ip}" 2>/dev/null)
+        if echo "${resp}" | grep -q '"isp"'; then
+            ok=2
+            asn_type=$(echo "${resp}" | grep_json_value 'isp')
+        fi
+    fi
+
+    if [ "${ok}" = "0" ]; then
         echo -n -e "\r IP Type:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
         echo -n -e "\r IP Risk:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
         modifyJsonTemplate 'IPType_result' 'Unknow'
@@ -781,15 +820,20 @@ MediaUnlockTest_IPAttribute() {
     fi
 
     local iptype="Other"
-    case "${asn_type}" in
-        hosting) iptype="Hosting" ;;
-        isp) iptype="ISP" ;;
-        business) iptype="Business" ;;
-        education) iptype="Education" ;;
-        government) iptype="Government" ;;
-    esac
-    if [ "${mobile}" = "true" ] && [ "${asn_type}" != "hosting" ]; then
-        iptype="Mobile"
+    if [ "${ok}" = "2" ]; then
+        # 兜底数据源只提供运营商/组织名
+        iptype="${asn_type}"
+    else
+        case "${asn_type}" in
+            hosting) iptype="Hosting" ;;
+            isp) iptype="ISP" ;;
+            business) iptype="Business" ;;
+            education) iptype="Education" ;;
+            government) iptype="Government" ;;
+        esac
+        if [ "${mobile}" = "true" ] && [ "${asn_type}" != "hosting" ]; then
+            iptype="Mobile"
+        fi
     fi
 
     local tags=""
@@ -798,7 +842,9 @@ MediaUnlockTest_IPAttribute() {
     [ "${tor}" = "true" ] && tags="${tags}${tags:+, }Tor"
 
     local risk="Low"
-    if [ "${tor}" = "true" ] || [ "${proxy}" = "true" ] || [ "${vpn}" = "true" ]; then
+    if [ "${ok}" = "2" ]; then
+        risk="unknown"
+    elif [ "${tor}" = "true" ] || [ "${proxy}" = "true" ] || [ "${vpn}" = "true" ]; then
         risk="High"
     elif [ "${hosting}" = "true" ]; then
         risk="Medium"
@@ -807,6 +853,7 @@ MediaUnlockTest_IPAttribute() {
     local color="${Font_Green}"
     [ "${risk}" = "Medium" ] && color="${Font_Yellow}"
     [ "${risk}" = "High" ] && color="${Font_Red}"
+    [ "${risk}" = "unknown" ] && color="${Font_SkyBlue}"
 
     modifyJsonTemplate 'IPType_result' "${iptype}" "${tags}"
     modifyJsonTemplate 'IPRisk_result' "${risk}"
