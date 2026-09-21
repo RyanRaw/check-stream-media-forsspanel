@@ -32,7 +32,7 @@ The code for this script to detect streaming media unlocking is all from the ope
   "AmazonPV":   {"status": "yes", "region": "MY", "type": "native"},
   "Abema":      {"status": "yes", "region": "oversea", "type": "native"},
   "BBC":        {"status": "no",  "region": "originals", "type": "native"},
-  "OpenAI":     {"status": "yes"},
+  "OpenAI":     {"status": "app", "region": "MO"},
   "Reddit":     {"status": "no", "region": "MY", "type": "native"},
   "UnlockType": "Native",
   "IPType":     "Hosting (VPN)",
@@ -42,8 +42,8 @@ The code for this script to detect streaming media unlocking is all from the ope
 
 | 字段 | 取值 |
 | --- | --- |
-| `status` | `yes` / `no` / `soon`（Disney+ 即将上线）/ `unknown`（网络异常） |
-| `region` | 区服码（`US`、`TW`、`HK`…），或描述值：`oversea`（Abema 海外可用）、`originals`（Netflix 仅自制剧）、`banned`（Disney+ 封禁 IP）、`web` / `app`（ChatGPT 仅网页 / 仅 APP） |
+| `status` | `yes` / `no` / `soon`（Disney+ 即将上线）/ `web`（ChatGPT 仅网页可用）/ `app`（ChatGPT 仅 APP 可用）/ `unknown`（网络异常） |
+| `region` | 区服码（`US`、`TW`、`MO`…；ChatGPT 取出口 IP 所在地区），或描述值：`oversea`（Abema 海外可用）、`originals`（Netflix 仅自制剧）、`banned`（Disney+ 封禁 IP） |
 | `type` | `native`（DNS 未被污染）/ `dns`（DNS 被劫持），取自 `UnlockType` 检测 |
 
 # How to use

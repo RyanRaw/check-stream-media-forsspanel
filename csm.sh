@@ -551,79 +551,47 @@ MediaUnlockTest_YouTube_Premium() {
 }
 
 ###
-
  # ChatGPT 检测: 同步自上游 lmc999/RegionRestrictionCheck (check.sh WebTest_OpenAI)
-
  # 原实现参考 https://github.com/missuo/OpenAI-Checker
-
 ###
 
-
-
 OpenAiUnlockTest()
-
 {
-
     local tmpresult1=$(curl $useNIC $usePROXY $xForward -s ${ssll} --max-time 20 'https://api.openai.com/compliance/cookie_requirements' -H 'authority: api.openai.com' -H 'accept: */*' -H 'accept-language: en-US,en;q=0.9' -H 'authorization: Bearer null' -H 'content-type: application/json' -H 'origin: https://platform.openai.com' -H 'referer: https://platform.openai.com/' -H "sec-ch-ua: ${UA_SEC_CH_UA}" -H 'sec-ch-ua-mobile: ?0' -H 'sec-ch-ua-platform: "Windows"' -H 'sec-fetch-dest: empty' -H 'sec-fetch-mode: cors' -H 'sec-fetch-site: same-site' --user-agent "${UA_Browser}" 2>&1)
-
     local tmpresult2=$(curl $useNIC $usePROXY $xForward -s ${ssll} --max-time 20 'https://ios.chat.openai.com/' -H 'authority: ios.chat.openai.com' -H 'accept: */*;q=0.8,application/signed-exchange;v=b3;q=0.7' -H 'accept-language: en-US,en;q=0.9' -H "sec-ch-ua: ${UA_SEC_CH_UA}" -H 'sec-ch-ua-mobile: ?0' -H 'sec-ch-ua-platform: "Windows"' -H 'sec-fetch-dest: document' -H 'sec-fetch-mode: navigate' -H 'sec-fetch-site: none' -H 'sec-fetch-user: ?1' -H 'upgrade-insecure-requests: 1' --user-agent "${UA_Browser}" 2>&1)
 
-
-
     if [ -z "$tmpresult1" ] || [ -z "$tmpresult2" ]; then
-
         echo -n -e "\r ChatGPT:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
-
         modifyJsonTemplate 'OpenAI_result' 'Unknow'
-
         return
-
     fi
-
-
 
     local result1=$(echo "$tmpresult1" | grep -i 'unsupported_country')
-
     local result2=$(echo "$tmpresult2" | grep -i 'VPN')
 
-
+    # 地区码取自出口 IP
+    local ip="${local_ipv4}"
+    [ -z "${ip}" ] && ip=$(getPublicIP 4)
+    local region=$(getCountryCode "${ip}")
 
     if [ -z "$result1" ] && [ -z "$result2" ]; then
-
-        echo -n -e "\r ChatGPT:\t\t\t\t${Font_Green}Yes${Font_Suffix}\n"
-
-        modifyJsonTemplate 'OpenAI_result' 'Yes'
-
+        echo -n -e "\r ChatGPT:\t\t\t\t${Font_Green}Yes (Region: ${region})${Font_Suffix}\n"
+        modifyJsonTemplate 'OpenAI_result' 'Yes' "${region}"
         return
-
     fi
-
     if [ -n "$result1" ] && [ -n "$result2" ]; then
-
-        echo -n -e "\r ChatGPT:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
-
-        modifyJsonTemplate 'OpenAI_result' 'No'
-
+        echo -n -e "\r ChatGPT:\t\t\t\t${Font_Red}No (Region: ${region})${Font_Suffix}\n"
+        modifyJsonTemplate 'OpenAI_result' 'No' "${region}"
         return
-
     fi
-
     if [ -z "$result1" ] && [ -n "$result2" ]; then
-
-        echo -n -e "\r ChatGPT:\t\t\t\t${Font_Yellow}No (Only Available with Web Browser)${Font_Suffix}\n"
-
-        modifyJsonTemplate 'OpenAI_result' 'No' 'Web Only'
-
+        echo -n -e "\r ChatGPT:\t\t\t\t${Font_Yellow}Web Only (Region: ${region})${Font_Suffix}\n"
+        modifyJsonTemplate 'OpenAI_result' 'Web' "${region}"
         return
-
     fi
 
-
-
-    echo -n -e "\r ChatGPT:\t\t\t\t${Font_Yellow}No (Only Available with Mobile APP)${Font_Suffix}\n"
-
-    modifyJsonTemplate 'OpenAI_result' 'No' 'APP Only'
-
+    echo -n -e "\r ChatGPT:\t\t\t\t${Font_Yellow}APP Only (Region: ${region})${Font_Suffix}\n"
+    modifyJsonTemplate 'OpenAI_result' 'APP' "${region}"
 }
 
 
@@ -749,6 +717,19 @@ getPublicIP() {
         fi
     done
     echo ""
+}
+
+# 出口 IP 所属地区码(国家/地区二位码), 用于按地区上报的检测项
+getCountryCode() {
+    local ip="$1"
+    local cc=""
+    if [ -n "${ip}" ]; then
+        cc=$(curl -s --max-time 8 "https://api.country.is/${ip}" 2>/dev/null | grep_json_value 'country')
+    fi
+    if [ -z "${cc}" ] && [ -n "${ip}" ]; then
+        cc=$(curl -s --max-time 8 "http://ip-api.com/json/${ip}?fields=status,countryCode" 2>/dev/null | grep_json_value 'countryCode')
+    fi
+    echo "${cc}"
 }
 
 # IP 属性与定性风险:
@@ -916,6 +897,8 @@ modifyJsonTemplate() {
                 Yes) status="yes" ;;
                 No) status="no" ;;
                 Soon) status="soon" ;;
+                Web) status="web" ;;
+                APP) status="app" ;;
                 Unknow) status="unknown" ;;
                 *) status="$(echo "${result}" | tr '[:upper:]' '[:lower:]')" ;;
             esac
