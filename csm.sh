@@ -305,7 +305,7 @@ MediaUnlockTest_BBCiPLAYER() {
         modifyJsonTemplate 'BBC_result' 'No'
     else
         echo -n -e "\r BBC iPLAYER:\t\t\t\t${Font_Green}Yes${Font_Suffix}\n"
-        modifyJsonTemplate 'BBC_result' 'Yes'
+        modifyJsonTemplate 'BBC_result' 'Yes' 'UK'
     fi
 }
 
@@ -321,10 +321,10 @@ MediaUnlockTest_MyTVSuper() {
     local result=$(echo "$tmpresult" | grep_json_value 'country_code')
     if [ "$result" == 'HK' ]; then
         echo -n -e "\r MyTVSuper:\t\t\t\t${Font_Green}Yes${Font_Suffix}\n"
-        modifyJsonTemplate 'MyTVSuper_result' 'Yes'
+        modifyJsonTemplate 'MyTVSuper_result' 'Yes' 'HK'
     else
         echo -n -e "\r MyTVSuper:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
-        modifyJsonTemplate 'MyTVSuper_result' 'No'
+        modifyJsonTemplate 'MyTVSuper_result' 'No' "${result}"
     fi
 }
 
@@ -336,7 +336,7 @@ MediaUnlockTest_BilibiliHKMCTW() {
         local result="$(echo "${result}" | grep_json_value 'code')"
         if [ "${result}" = "0" ]; then
             echo -n -e "\r BiliBili Hongkong/Macau/Taiwan:\t${Font_Green}Yes${Font_Suffix}\n"
-            modifyJsonTemplate 'BilibiliHKMCTW_result' 'Yes'
+            modifyJsonTemplate 'BilibiliHKMCTW_result' 'Yes' 'HK/MC/TW'
         elif [ "${result}" = "-10403" ]; then
             echo -n -e "\r BiliBili Hongkong/Macau/Taiwan:\t${Font_Red}No${Font_Suffix}\n"
             modifyJsonTemplate 'BilibiliHKMCTW_result' 'No'
@@ -358,7 +358,7 @@ MediaUnlockTest_BilibiliTW() {
         local result="$(echo "${result}" | grep_json_value 'code')"
         if [ "${result}" = "0" ]; then
             echo -n -e "\r Bilibili Taiwan Only:\t\t\t${Font_Green}Yes${Font_Suffix}\n"
-            modifyJsonTemplate 'BilibiliTW_result' 'Yes'
+            modifyJsonTemplate 'BilibiliTW_result' 'Yes' 'TW'
         elif [ "${result}" = "-10403" ]; then
             echo -n -e "\r Bilibili Taiwan Only:\t\t\t${Font_Red}No${Font_Suffix}\n"
             modifyJsonTemplate 'BilibiliTW_result' 'No'
@@ -490,7 +490,7 @@ MediaUnlockTest_DisneyPlus() {
         return
     elif [ -n "$isUnavailable" ]; then
         echo -n -e "\r Disney+:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
-        modifyJsonTemplate 'DisneyPlus_result' 'No'
+        modifyJsonTemplate 'DisneyPlus_result' 'No' "${region}"
         return
     elif [ "$inSupportedLocation" == "false" ]; then
         echo -n -e "\r Disney+:\t\t\t\t${Font_Yellow}Available For [Disney+ $region] Soon${Font_Suffix}\n"
@@ -534,7 +534,7 @@ MediaUnlockTest_YouTube_Premium() {
 
     if [ -n "$isNotAvailable" ]; then
         echo -n -e "\r YouTube Premium:\t\t\t${Font_Red}No${Font_Suffix}\n"
-        modifyJsonTemplate 'YouTube_Premium_result' 'No'
+        modifyJsonTemplate 'YouTube_Premium_result' 'No' "${region}"
         return
     fi
     if [ -z "$region" ] && [ -n "$isAvailable" ]; then
@@ -908,8 +908,6 @@ modifyJsonTemplate() {
                 "Oversea Only") region="oversea" ;;
                 "Originals Only") region="originals" ;;
                 "IP Banned") region="banned" ;;
-                "Web Only") region="web" ;;
-                "APP Only") region="app" ;;
             esac
 
             value="{\"status\":\"${status}\""
