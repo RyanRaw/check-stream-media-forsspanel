@@ -113,6 +113,8 @@ IATACode=$(curl -s --retry 3 --max-time 10 "${CSM_REPO_RAW}/reference/IATACode.t
 if [ -z "${IATACode}" ]; then
     IATACode=$(curl -s --retry 3 --max-time 10 "https://raw.githubusercontent.com/lmc999/RegionRestrictionCheck/main/reference/IATACode.txt")
 fi
+# 国家/地区中文名参考 (code \t 中文名 \t 洲代码), 用于 UsageRegion / RegisteredRegion
+REGION_ZH=$(curl -s --retry 3 --max-time 10 "${CSM_REPO_RAW}/reference/region_zh.tsv")
 WOWOW_Cookie=$(echo "$Media_Cookie" | awk 'NR==3')
 TVer_Cookie="Accept: application/json;pk=BCpkADawqM0_rzsjsYbC1k1wlJLU4HiAtfzjxdUmfvvLUQB-Ax6VA-p-9wOEZbCEm3u95qq2Y1CQQW1K9tPaMma9iAqUqhpISCmyXrgnlpx9soEmoVNuQpiyGsTpePGumWxSs1YoKziYB6Wz"
 
@@ -695,11 +697,11 @@ MediaUnlockTest_UnlockType() {
     if [ -z "${bad}" ]; then
         UNLOCK_TYPE="native"
         echo -n -e "\r Unlock Type:\t\t\t\t${Font_Green}Native${Font_Suffix}\n"
-        modifyJsonTemplate 'UnlockType_result' 'Native'
+        setStringResult 'UnlockType_result' 'Native'
     else
         UNLOCK_TYPE="dns"
         echo -n -e "\r Unlock Type:\t\t\t\t${Font_Yellow}DNS Hijack${Font_Suffix} ${Font_SkyBlue}(${bad})${Font_Suffix}\n"
-        modifyJsonTemplate 'UnlockType_result' 'DNS Hijack' "${bad}"
+        setStringResult 'UnlockType_result' "DNS Hijack (${bad})"
     fi
 }
 
@@ -730,7 +732,38 @@ getCountryCode() {
     echo "${cc}"
 }
 
-# IP 属性与定性风险:
+# 从参考表取地区字段: $1=地区码 $2=列号(2=中文名 3=洲代码)
+getRegionName() {
+    printf '%s\n' "${REGION_ZH}" | awk -v c="$1" -v f="$2" -F'\t' '$1 == c { print $f; exit }'
+}
+
+# 地区对象: $1=地区码, $2=1 时附带洲信息
+regionObject() {
+    local code="$1"
+    if [ -z "${code}" ]; then
+        echo "null"
+        return
+    fi
+    local name=$(getRegionName "${code}" 2)
+    if [ "${2}" = "1" ]; then
+        local continent=$(getRegionName "${code}" 3)
+        local continent_name=""
+        case "${continent}" in
+            AS) continent_name="亚洲" ;;
+            EU) continent_name="欧洲" ;;
+            AF) continent_name="非洲" ;;
+            NA) continent_name="北美洲" ;;
+            SA) continent_name="南美洲" ;;
+            OC) continent_name="大洋洲" ;;
+            AN) continent_name="南极洲" ;;
+        esac
+        echo "{\"code\":\"${code}\",\"name\":\"${name}\",\"continent\":\"${continent}\",\"continent_name\":\"${continent_name}\"}"
+    else
+        echo "{\"code\":\"${code}\",\"name\":\"${name}\"}"
+    fi
+}
+
+# IP 属性 / 使用地 / 注册地 / 定性风险
 #   源1 ipinfo.io widget(无需 token) -> 源2 ip-api.com(免费, IPv4) -> 源3 ip.sb(仅运营商信息)
 MediaUnlockTest_IPAttribute() {
     local ip="${local_ipv4}"
@@ -747,7 +780,7 @@ MediaUnlockTest_IPAttribute() {
         family=6
     fi
 
-    local resp asn_type="" hosting="" vpn="" proxy="" tor="" mobile="" ok=0
+    local resp asn_type="" hosting="" vpn="" proxy="" tor="" mobile="" usage_code="" reg_code="" ok=0
 
     if [ -n "${ip}" ]; then
         # 源1: ipinfo.io widget
@@ -760,17 +793,21 @@ MediaUnlockTest_IPAttribute() {
             proxy=$(echo "${resp}" | grep_json_value 'proxy')
             tor=$(echo "${resp}" | grep_json_value 'tor')
             mobile=$(echo "${resp}" | grep_json_value 'is_mobile')
+            # 使用地 = data.country, 注册地 = data.abuse.country
+            usage_code=$(echo "${resp}" | grep -oE '"country"[[:space:]]*:[[:space:]]*"[A-Z]{2}"' | sed -n '1p' | cut -d '"' -f4)
+            reg_code=$(echo "${resp}" | grep -oE '"country"[[:space:]]*:[[:space:]]*"[A-Z]{2}"' | sed -n '2p' | cut -d '"' -f4)
         fi
     fi
 
     if [ "${ok}" != "1" ] && [ -n "${ip}" ] && [ "${family}" = "4" ]; then
         # 源2: ip-api.com 免费接口(仅 IPv4)
-        resp=$(curl -s --max-time 10 -4 ${ssll} "http://ip-api.com/json/${ip}?fields=status,proxy,hosting,mobile" 2>/dev/null)
+        resp=$(curl -s --max-time 10 -4 ${ssll} "http://ip-api.com/json/${ip}?fields=status,proxy,hosting,mobile,countryCode" 2>/dev/null)
         if echo "${resp}" | grep -q '"status":"success"'; then
             ok=1
             hosting=$(echo "${resp}" | grep_json_value 'hosting')
             proxy=$(echo "${resp}" | grep_json_value 'proxy')
             mobile=$(echo "${resp}" | grep_json_value 'mobile')
+            usage_code=$(echo "${resp}" | grep_json_value 'countryCode')
             if [ "${hosting}" = "true" ]; then
                 asn_type="hosting"
             elif [ "${mobile}" = "true" ]; then
@@ -787,39 +824,44 @@ MediaUnlockTest_IPAttribute() {
         if echo "${resp}" | grep -q '"isp"'; then
             ok=2
             asn_type=$(echo "${resp}" | grep_json_value 'isp')
+            usage_code=$(echo "${resp}" | grep_json_value 'country_code')
         fi
     fi
 
     if [ "${ok}" = "0" ]; then
         echo -n -e "\r IP Type:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
         echo -n -e "\r IP Risk:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
-        modifyJsonTemplate 'IPType_result' 'Unknow'
-        modifyJsonTemplate 'IPRisk_result' 'Unknow'
+        setStringResult 'IPType_result' ''
+        setStringResult 'IPattributes_result' ''
+        setStringResult 'IPRisk_result' 'Unknow'
+        setRawResult 'UsageRegion_result' 'null'
+        setRawResult 'RegisteredRegion_result' 'null'
         return
     fi
 
-    local iptype="Other"
-    if [ "${ok}" = "2" ]; then
-        # 兜底数据源只提供运营商/组织名
-        iptype="${asn_type}"
-    else
-        case "${asn_type}" in
-            hosting) iptype="Hosting" ;;
-            isp) iptype="ISP" ;;
-            business) iptype="Business" ;;
-            education) iptype="Education" ;;
-            government) iptype="Government" ;;
-        esac
-        if [ "${mobile}" = "true" ] && [ "${asn_type}" != "hosting" ]; then
-            iptype="Mobile"
+    # IP 属性: host / isp / mobile / business / education / government / other
+    local attrs="other"
+    case "${asn_type}" in
+        hosting) attrs="host" ;;
+        isp | lineisp) attrs="isp" ;;
+        mobile) attrs="mobile" ;;
+        business) attrs="business" ;;
+        education) attrs="education" ;;
+        government) attrs="government" ;;
+        *) [ -n "${asn_type}" ] && attrs="${asn_type}" ;;
+    esac
+
+    # IP 类型: 使用地与注册地一致为原生, 不一致为广播(参考 IPQuality 的地理一致性判定)
+    local iptype=""
+    if [ -n "${usage_code}" ] && [ -n "${reg_code}" ]; then
+        if [ "${usage_code}" = "${reg_code}" ]; then
+            iptype="Native"
+        else
+            iptype="Broadcast"
         fi
     fi
 
-    local tags=""
-    [ "${vpn}" = "true" ] && tags="${tags}${tags:+, }VPN"
-    [ "${proxy}" = "true" ] && tags="${tags}${tags:+, }Proxy"
-    [ "${tor}" = "true" ] && tags="${tags}${tags:+, }Tor"
-
+    # 定性风险: VPN / 代理 / Tor 高风险, 机房中风险, 其余低风险
     local risk="Low"
     if [ "${ok}" = "2" ]; then
         risk="unknown"
@@ -834,15 +876,16 @@ MediaUnlockTest_IPAttribute() {
     [ "${risk}" = "High" ] && color="${Font_Red}"
     [ "${risk}" = "unknown" ] && color="${Font_SkyBlue}"
 
-    modifyJsonTemplate 'IPType_result' "${iptype}" "${tags}"
-    modifyJsonTemplate 'IPRisk_result' "${risk}"
+    setStringResult 'IPType_result' "${iptype}"
+    setStringResult 'IPattributes_result' "${attrs}"
+    setStringResult 'IPRisk_result' "${risk}"
+    setRawResult 'UsageRegion_result' "$(regionObject "${usage_code}" 1)"
+    setRawResult 'RegisteredRegion_result' "$(regionObject "${reg_code}" 0)"
 
-    if [ -n "${tags}" ]; then
-        echo -n -e "\r IP Type:\t\t\t\t${color}${iptype} (${tags})${Font_Suffix}\n"
-    else
-        echo -n -e "\r IP Type:\t\t\t\t${color}${iptype}${Font_Suffix}\n"
-    fi
+    echo -n -e "\r IP Type:\t\t\t\t${color}${iptype}${Font_Suffix} ${Font_SkyBlue}(${attrs})${Font_Suffix}\n"
     echo -n -e "\r IP Risk:\t\t\t\t${color}${risk}${Font_Suffix}\n"
+    echo -n -e "\r Usage Region:\t\t\t\t${usage_code} ${Font_SkyBlue}$(getRegionName "${usage_code}" 2)${Font_Suffix}\n"
+    echo -n -e "\r Registered Region:\t\t\t${reg_code} ${Font_SkyBlue}$(getRegionName "${reg_code}" 2)${Font_Suffix}\n"
 }
 
 ###########################################
@@ -865,58 +908,60 @@ createJsonTemplate() {
     "TikTok": TikTok_result,
     "AmazonPV": AmazonPV_result,
     "Reddit": Reddit_result,
-    "UnlockType": "UnlockType_result",
-    "IPType": "IPType_result",
-    "IPRisk": "IPRisk_result"
+    "UnlockType": UnlockType_result,
+    "IPType": IPType_result,
+    "IPattributes": IPattributes_result,
+    "IPRisk": IPRisk_result,
+    "UsageRegion": UsageRegion_result,
+    "RegisteredRegion": RegisteredRegion_result
 }' > "${CSM_DIR}/media_test_tpl.json"
 }
 
-# 上报值转换:
-#   流媒体项 -> 对象 {"status":"yes","region":"MY","type":"native"}
-#   UnlockType / IPType / IPRisk -> 字符串
+# 流媒体项上报值: 对象 {"status":"yes","region":"MY","type":"native"}
 modifyJsonTemplate() {
     local key_word=$1
     local result=$2
     local region=$3
-    local value=""
+    local status=""
 
-    case "${key_word}" in
-        UnlockType_result | IPType_result | IPRisk_result)
-            # 模板中这三项本身已带引号, 此处只替换引号内的内容
-            if [[ "${region}" == "" ]]; then
-                value="${result}"
-            else
-                value="${result} (${region})"
-            fi
-            ;;
-        *)
-            local status=""
-            case "${result}" in
-                Yes) status="yes" ;;
-                No) status="no" ;;
-                Soon) status="soon" ;;
-                Web) status="web" ;;
-                APP) status="app" ;;
-                Originals) status="originals" ;;
-                Oversea) status="oversea" ;;
-                Banned) status="banned" ;;
-                Anonymous) status="anonymous" ;;
-                Unknow) status="unknown" ;;
-                *) status="$(echo "${result}" | tr '[:upper:]' '[:lower:]')" ;;
-            esac
-
-            value="{\"status\":\"${status}\""
-            if [[ "${region}" != "" ]]; then
-                value="${value},\"region\":\"${region}\""
-            fi
-            if [[ "${UNLOCK_TYPE:-}" != "" ]]; then
-                value="${value},\"type\":\"${UNLOCK_TYPE}\""
-            fi
-            value="${value}}"
-            ;;
+    case "${result}" in
+        Yes) status="yes" ;;
+        No) status="no" ;;
+        Soon) status="soon" ;;
+        Web) status="web" ;;
+        APP) status="app" ;;
+        Originals) status="originals" ;;
+        Oversea) status="oversea" ;;
+        Banned) status="banned" ;;
+        Anonymous) status="anonymous" ;;
+        Unknow) status="unknown" ;;
+        *) status="$(echo "${result}" | tr '[:upper:]' '[:lower:]')" ;;
     esac
 
+    local value="{\"status\":\"${status}\""
+    if [[ "${region}" != "" ]]; then
+        value="${value},\"region\":\"${region}\""
+    fi
+    if [[ "${UNLOCK_TYPE:-}" != "" ]]; then
+        value="${value},\"type\":\"${UNLOCK_TYPE}\""
+    fi
+    value="${value}}"
+
     sed -i "s#${key_word}#${value}#g" "${CSM_DIR}/media_test_tpl.json"
+}
+
+# 写入字符串值(模板占位不带引号)
+setStringResult() {
+    local escaped
+    escaped=$(printf '%s' "${2}" | sed 's/&/\\&/g')
+    sed -i "s#${1}#\"${escaped}\"#g" "${CSM_DIR}/media_test_tpl.json"
+}
+
+# 写入原始 JSON 片段(对象 / null)
+setRawResult() {
+    local escaped
+    escaped=$(printf '%s' "${2}" | sed 's/&/\\&/g')
+    sed -i "s#${1}#${escaped}#g" "${CSM_DIR}/media_test_tpl.json"
 }
 
 setCronTask() {
@@ -1040,7 +1085,7 @@ printInfo() {
     echo -e "${green_start}The code for this script to detect streaming media unlocking is all from the open source project https://github.com/lmc999/RegionRestrictionCheck , and the open source protocol is AGPL-3.0. This script is open source as required by the open source license. Thanks to the original author @lmc999 and everyone who made the pull request for this project for their contributions.${color_end}"
     echo
     echo -e "${green_start}Project: https://github.com/RyanRaw/check-stream-media-forsspanel${color_end}"
-    echo -e "${green_start}Version: 2026-09-21 v.2.3.0${color_end}"
+    echo -e "${green_start}Version: 2026-09-21 v.2.4.0${color_end}"
     echo -e "${green_start}Detect logic synced with upstream check.sh v1.0.1${color_end}"
     echo -e "${green_start}Extra checks (TikTok / Amazon Prime Video / Reddit) ref: https://github.com/xykt/IPQuality${color_end}"
     echo -e "${green_start}Author: @iamsaltedfish, fork by @RyanRaw${color_end}"

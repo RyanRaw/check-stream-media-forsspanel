@@ -7,15 +7,18 @@ The code for this script to detect streaming media unlocking is all from the ope
 
 另参考 [xykt/IPQuality](https://github.com/xykt/IPQuality) 补充了 TikTok / Amazon Prime Video / Reddit 三项解锁检测，并采用其 `contentRegion`、`currentTerritory`、`country` 等信息更详细的区服判据。
 
-同时新增三列 IP 维度信息（面板动态渲染，无需改动面板前端）：
+同时新增以下 IP 维度字段（面板动态渲染，无需改动面板前端）：
 
-| 列名 | 含义 | 取值示例 | 数据来源 |
+| 列名 | 类型 | 含义与取值 | 数据来源 |
 | --- | --- | --- | --- |
-| `UnlockType` | DNS 是否被劫持/污染（IPQuality 的 Native 判定） | `Native` / `DNS Hijack (netflix.com)` | `dig` / `nslookup` 解析随机子域 |
-| `IPType` | IP 属性 | `Hosting` / `ISP` / `Mobile` / `Business`，代理类会附加 `(VPN, Proxy, Tor)` | `ipinfo.io/widget/demo`，依次回退 `ip-api.com`（仅 IPv4）、`ip.sb`（仅运营商名） |
-| `IPRisk` | 定性风险等级 | `Low` / `Medium`（机房）/ `High`（VPN/代理/Tor）/ `unknown`（仅兜底源可用） | 由 `hosting/proxy/vpn/tor` 推导 |
+| `UnlockType` | 字符串 | DNS 是否被劫持/污染：`Native` / `DNS Hijack (netflix.com)` | `dig` / `nslookup` 解析随机子域 |
+| `IPType` | 字符串 | 使用地与注册地一致为 `Native`（原生 IP），不一致为 `Broadcast`（广播 IP） | ipinfo 的 `country` 与 `abuse.country` |
+| `IPattributes` | 字符串 | IP 使用类型：`host` / `isp` / `mobile` / `business` / `education` / `government` / `other` | ASN 使用类型（ipinfo / ip-api） |
+| `IPRisk` | 字符串 | `Low` / `Medium`（机房）/ `High`（VPN/代理/Tor）/ `unknown`（仅兜底源可用） | 由 `hosting/proxy/vpn/tor` 推导 |
+| `UsageRegion` | 对象 | 使用地：`{"code":"JP","name":"日本","continent":"AS","continent_name":"亚洲"}` | ipinfo 使用地 + `reference/region_zh.tsv` |
+| `RegisteredRegion` | 对象 | 注册地：`{"code":"ZA","name":"南非"}` | ipinfo 注册地（`abuse.country`）+ `reference/region_zh.tsv` |
 
-出口 IP 由 `api64.ipify.org`、`api.ip.sb`、`ipinfo.io/ip`、`ifconfig.me`、`ip-api.com` 多源兜底获取（IPv4 优先，失败再试 IPv6）。`UnlockType` 与 `IPRisk` 均为纯本地判定，不依赖第三方接口；`IPType` 需要一次外部查询，所有数据源都不可用时这两列写 `Unknow`，不影响其余检测与上报。
+出口 IP 由 `api64.ipify.org`、`api.ip.sb`、`ipinfo.io/ip`、`ifconfig.me`、`ip-api.com` 多源兜底获取（IPv4 优先，失败再试 IPv6）。`UnlockType` 为纯本地判定；其余字段需要外部查询，依次尝试 `ipinfo.io/widget/demo` → `ip-api.com`（仅 IPv4）→ `api.ip.sb`（仅运营商信息，此时 `IPRisk` 为 `unknown`）；全部失败时 `IPType` / `IPattributes` 为空字符串、地区对象为 `null`，不影响其余检测与上报。
 
 # 上报格式
 
@@ -26,24 +29,27 @@ The code for this script to detect streaming media unlocking is all from the ope
 ```json
 {
   "Netflix":    {"status": "yes", "region": "MY", "type": "native"},
-  "DisneyPlus": {"status": "soon", "region": "MY", "type": "native"},
+  "DisneyPlus": {"status": "no",  "region": "MY", "type": "native"},
   "TikTok":     {"status": "yes", "region": "MY", "type": "dns"},
   "YouTube":    {"status": "yes", "region": "MY", "type": "native"},
   "AmazonPV":   {"status": "yes", "region": "MY", "type": "native"},
-  "Abema":      {"status": "oversea", "region": "MY", "type": "native"},
-  "BBC":        {"status": "no",  "region": "UK", "type": "native"},
+  "Abema":      {"status": "yes", "region": "oversea", "type": "native"},
+  "BBC":        {"status": "no",  "region": "originals", "type": "native"},
   "OpenAI":     {"status": "app", "region": "MO"},
   "Reddit":     {"status": "no", "region": "MY", "type": "native"},
   "UnlockType": "Native",
-  "IPType":     "Hosting (VPN)",
-  "IPRisk":     "High"
+  "IPType":     "Broadcast",
+  "IPattributes": "host",
+  "IPRisk":     "Low",
+  "UsageRegion":      {"code": "JP", "name": "日本", "continent": "AS", "continent_name": "亚洲"},
+  "RegisteredRegion": {"code": "ZA", "name": "南非"}
 }
 ```
 
 | 字段 | 取值 |
 | --- | --- |
-| `status` | `yes` / `no` / `soon`（Disney+ 即将上线）/ `originals`（Netflix 仅自制剧）/ `oversea`（Abema 海外可用）/ `banned`（Disney+ 封禁 IP）/ `anonymous`（Abema 判为匿名 IP）/ `web`（ChatGPT 仅网页）/ `app`（ChatGPT 仅 APP）/ `unknown`（网络异常） |
-| `region` | 区服码（`US`、`TW`、`MO`…；ChatGPT 取出口 IP 所在地区），取不到时省略该字段 |
+| `status` | `yes` / `no` / `soon`（Disney+ 即将上线）/ `web`（ChatGPT 仅网页可用）/ `app`（ChatGPT 仅 APP 可用）/ `unknown`（网络异常） |
+| `region` | 区服码（`US`、`TW`、`MO`…；ChatGPT 取出口 IP 所在地区），或描述值：`oversea`（Abema 海外可用）、`originals`（Netflix 仅自制剧）、`banned`（Disney+ 封禁 IP） |
 | `type` | `native`（DNS 未被污染）/ `dns`（DNS 被劫持），取自 `UnlockType` 检测 |
 
 # How to use
@@ -96,7 +102,7 @@ bash csm.sh
 
 - `csm.sh`：流媒体解锁检测 + 结果上报脚本，也是定时任务实际执行的脚本。
 - `install.sh`：一键安装 / 更新脚本。
-- `cookies`、`reference/`：检测所需的 Cookie 与参考数据，脚本运行时会从本仓库拉取。
+- `cookies`、`reference/`：检测所需的 Cookie 与参考数据（`IATACode.txt`、`region_zh.tsv` 地区中文名表），脚本运行时会从本仓库拉取。
 
 # 安装产物
 
