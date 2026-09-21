@@ -5,7 +5,7 @@ The code for this script to detect streaming media unlocking is all from the ope
 
 检测逻辑已同步上游 `check.sh` v1.0.1（BBC iPLAYER / MyTVSuper / Bilibili / AbemaTV / Netflix / YouTube Premium / Disney+ / ChatGPT），资源文件 `cookies` 与 `reference/IATACode.txt` 保持与上游一致。
 
-另参考 [xykt/IPQuality](https://github.com/xykt/IPQuality) 补充了 TikTok / Amazon Prime Video / Reddit 三项解锁检测，并采用其 `contentRegion`、`currentTerritory`、`country` 等信息更详细的区服判据。
+另参考 [xykt/IPQuality](https://github.com/xykt/IPQuality) 补充了 TikTok / Amazon Prime Video / Reddit 三项解锁检测，并采用其 `contentRegion`、`currentTerritory`、`country` 等信息更详细的区服判据；Google Gemini 的判据取自上游 `check.sh` 的 `WebTest_Gemini`。
 
 同时新增以下 IP 维度字段（面板动态渲染，无需改动面板前端）：
 
@@ -36,6 +36,7 @@ The code for this script to detect streaming media unlocking is all from the ope
   "Abema":      {"status": "yes", "region": "oversea", "type": "native"},
   "BBC":        {"status": "no",  "region": "originals", "type": "native"},
   "OpenAI":     {"status": "app", "region": "MO"},
+  "Gemini":     {"status": "yes", "region": "TW", "type": "native"},
   "Reddit":     {"status": "no", "region": "MY", "type": "native"},
   "UnlockType": "Native",
   "IPType":     "Broadcast",

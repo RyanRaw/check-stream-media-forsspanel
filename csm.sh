@@ -594,6 +594,29 @@ OpenAiUnlockTest()
     modifyJsonTemplate 'OpenAI_result' 'APP' "${region}"
 }
 
+# Google Gemini: 参考上游 check.sh 的 WebTest_Gemini, 页面含可用标记即为解锁
+MediaUnlockTest_Gemini() {
+    local tmpresult=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${1} ${ssll} -sL --max-time 25 "https://gemini.google.com" 2>&1)
+
+    if [ -z "$tmpresult" ]; then
+        echo -n -e "\r Google Gemini:\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
+        modifyJsonTemplate 'Gemini_result' 'Unknow'
+        return
+    fi
+
+    local isOK=$(echo "$tmpresult" | grep -c '45631641,null,true')
+
+    if [ "${isOK}" -gt 0 ]; then
+        local ip="${local_ipv4}"
+        [ -z "${ip}" ] && ip=$(getPublicIP 4)
+        local region=$(getCountryCode "${ip}")
+        echo -n -e "\r Google Gemini:\t\t\t${Font_Green}Yes (Region: ${region})${Font_Suffix}\n"
+        modifyJsonTemplate 'Gemini_result' 'Yes' "${region}"
+    else
+        echo -n -e "\r Google Gemini:\t\t\t${Font_Red}No${Font_Suffix}\n"
+        modifyJsonTemplate 'Gemini_result' 'No'
+    fi
+}
 
 ###########################################
 #                                         #
@@ -922,6 +945,7 @@ createJsonTemplate() {
     "BBC": BBC_result,
     "Abema": AbemaTV_result,
     "OpenAI": OpenAI_result,
+    "Gemini": Gemini_result,
     "TikTok": TikTok_result,
     "AmazonPV": AmazonPV_result,
     "Reddit": Reddit_result,
@@ -1102,7 +1126,7 @@ printInfo() {
     echo -e "${green_start}The code for this script to detect streaming media unlocking is all from the open source project https://github.com/lmc999/RegionRestrictionCheck , and the open source protocol is AGPL-3.0. This script is open source as required by the open source license. Thanks to the original author @lmc999 and everyone who made the pull request for this project for their contributions.${color_end}"
     echo
     echo -e "${green_start}Project: https://github.com/RyanRaw/check-stream-media-forsspanel${color_end}"
-    echo -e "${green_start}Version: 2026-09-21 v.2.4.1${color_end}"
+    echo -e "${green_start}Version: 2026-09-21 v.2.5.0${color_end}"
     echo -e "${green_start}Detect logic synced with upstream check.sh v1.0.1${color_end}"
     echo -e "${green_start}Extra checks (TikTok / Amazon Prime Video / Reddit) ref: https://github.com/xykt/IPQuality${color_end}"
     echo -e "${green_start}Author: @iamsaltedfish, fork by @RyanRaw${color_end}"
@@ -1121,6 +1145,7 @@ runCheck() {
     MediaUnlockTest_YouTube_Premium 4
     MediaUnlockTest_DisneyPlus 4
     OpenAiUnlockTest
+    MediaUnlockTest_Gemini 4
     MediaUnlockTest_TikTok 4
     MediaUnlockTest_PrimeVideo 4
     MediaUnlockTest_Reddit 4
