@@ -719,6 +719,16 @@ getPublicIP() {
     echo ""
 }
 
+# IP 注册地(RIR 注册国): RDAP 优先, 语义与 MaxMind 的 RegisteredCountry 一致
+getRegisteredCountry() {
+    local ip="$1"
+    local cc=""
+    if [ -n "${ip}" ]; then
+        cc=$(curl -sL --max-time 10 "https://rdap.org/ip/${ip}" 2>/dev/null | grep -oE '"country"[[:space:]]*:[[:space:]]*"[A-Z]{2}"' | head -n 1 | cut -d '"' -f4)
+    fi
+    echo "${cc}"
+}
+
 # 出口 IP 所属地区码(国家/地区二位码), 用于按地区上报的检测项
 getCountryCode() {
     local ip="$1"
@@ -837,6 +847,13 @@ MediaUnlockTest_IPAttribute() {
         setRawResult 'UsageRegion_result' 'null'
         setRawResult 'RegisteredRegion_result' 'null'
         return
+    fi
+
+    # 注册地优先用 RDAP(RIR 注册数据), ipinfo 的 abuse.country 只是滥用联系人地址国,
+    # 常与真实注册地不符, 会导致原生/广播误判
+    local rdap_code=$(getRegisteredCountry "${ip}")
+    if [ -n "${rdap_code}" ]; then
+        reg_code="${rdap_code}"
     fi
 
     # IP 属性: host / isp / mobile / business / education / government / other
@@ -1085,7 +1102,7 @@ printInfo() {
     echo -e "${green_start}The code for this script to detect streaming media unlocking is all from the open source project https://github.com/lmc999/RegionRestrictionCheck , and the open source protocol is AGPL-3.0. This script is open source as required by the open source license. Thanks to the original author @lmc999 and everyone who made the pull request for this project for their contributions.${color_end}"
     echo
     echo -e "${green_start}Project: https://github.com/RyanRaw/check-stream-media-forsspanel${color_end}"
-    echo -e "${green_start}Version: 2026-09-21 v.2.4.0${color_end}"
+    echo -e "${green_start}Version: 2026-09-21 v.2.4.1${color_end}"
     echo -e "${green_start}Detect logic synced with upstream check.sh v1.0.1${color_end}"
     echo -e "${green_start}Extra checks (TikTok / Amazon Prime Video / Reddit) ref: https://github.com/xykt/IPQuality${color_end}"
     echo -e "${green_start}Author: @iamsaltedfish, fork by @RyanRaw${color_end}"

@@ -12,11 +12,11 @@ The code for this script to detect streaming media unlocking is all from the ope
 | 列名 | 类型 | 含义与取值 | 数据来源 |
 | --- | --- | --- | --- |
 | `UnlockType` | 字符串 | DNS 是否被劫持/污染：`Native` / `DNS Hijack (netflix.com)` | `dig` / `nslookup` 解析随机子域 |
-| `IPType` | 字符串 | 使用地与注册地一致为 `Native`（原生 IP），不一致为 `Broadcast`（广播 IP） | ipinfo 的 `country` 与 `abuse.country` |
+| `IPType` | 字符串 | 使用地与注册地一致为 `Native`（原生 IP），不一致为 `Broadcast`（广播 IP） | 使用地取 ipinfo `country`；注册地取 RIR 的 RDAP 数据（`rdap.org`，语义等同 MaxMind `RegisteredCountry`），失败回退 ipinfo `abuse.country` |
 | `IPattributes` | 字符串 | IP 使用类型：`host` / `isp` / `mobile` / `business` / `education` / `government` / `other` | ASN 使用类型（ipinfo / ip-api） |
 | `IPRisk` | 字符串 | `Low` / `Medium`（机房）/ `High`（VPN/代理/Tor）/ `unknown`（仅兜底源可用） | 由 `hosting/proxy/vpn/tor` 推导 |
 | `UsageRegion` | 对象 | 使用地：`{"code":"JP","name":"日本","continent":"AS","continent_name":"亚洲"}` | ipinfo 使用地 + `reference/region_zh.tsv` |
-| `RegisteredRegion` | 对象 | 注册地：`{"code":"ZA","name":"南非"}` | ipinfo 注册地（`abuse.country`）+ `reference/region_zh.tsv` |
+| `RegisteredRegion` | 对象 | 注册地：`{"code":"ZA","name":"南非"}` | RIR 注册国（RDAP）+ `reference/region_zh.tsv` |
 
 出口 IP 由 `api64.ipify.org`、`api.ip.sb`、`ipinfo.io/ip`、`ifconfig.me`、`ip-api.com` 多源兜底获取（IPv4 优先，失败再试 IPv6）。`UnlockType` 为纯本地判定；其余字段需要外部查询，依次尝试 `ipinfo.io/widget/demo` → `ip-api.com`（仅 IPv4）→ `api.ip.sb`（仅运营商信息，此时 `IPRisk` 为 `unknown`）；全部失败时 `IPType` / `IPattributes` 为空字符串、地区对象为 `null`，不影响其余检测与上报。
 
