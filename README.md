@@ -5,6 +5,8 @@ The code for this script to detect streaming media unlocking is all from the ope
 
 检测逻辑已同步上游 `check.sh` v1.0.1（BBC iPLAYER / MyTVSuper / Bilibili / AbemaTV / Netflix / YouTube Premium / Disney+ / ChatGPT），资源文件 `cookies` 与 `reference/IATACode.txt` 保持与上游一致。
 
+另参考 [xykt/IPQuality](https://github.com/xykt/IPQuality) 补充了 TikTok / Amazon Prime Video / Reddit 三项解锁检测，并采用其 `contentRegion`、`currentTerritory`、`country` 等信息更详细的区服判据。
+
 # How to use
 
 ## 一键安装（推荐）

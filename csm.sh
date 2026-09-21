@@ -417,6 +417,10 @@ MediaUnlockTest_Netflix() {
 
     local region=$(echo "$tmpresult1" | sed -n 's/.*"id":"\([^"]*\)".*"countryName":"[^"]*".*/\1/p' | head -n 1)
     if [ -z "${region}" ]; then
+        # 与 IPQuality 一致: 第一个页面取不到区服时用第二个页面兜底
+        region=$(echo "$tmpresult2" | sed -n 's/.*"id":"\([^"]*\)".*"countryName":"[^"]*".*/\1/p' | head -n 1)
+    fi
+    if [ -z "${region}" ]; then
         region="US"
     fi
     echo -n -e "\r Netflix:\t\t\t\t${Font_Green}Yes (Region: ${region})${Font_Suffix}\n"
@@ -514,7 +518,11 @@ MediaUnlockTest_YouTube_Premium() {
     fi
 
     local isNotAvailable=$(echo "$tmpresult" | grep -i 'Premium is not available in your country')
-    local region=$(echo "$tmpresult" | grep_json_value 'INNERTUBE_CONTEXT_GL')
+    # IPQuality 做法: contentRegion 比 INNERTUBE_CONTEXT_GL 更贴近真实区服
+    local region=$(echo "$tmpresult" | grep_json_value 'contentRegion')
+    if [ -z "$region" ]; then
+        region=$(echo "$tmpresult" | grep_json_value 'INNERTUBE_CONTEXT_GL')
+    fi
     local isAvailable=$(echo "$tmpresult" | grep -i 'ad-free')
 
     if [ -n "$isNotAvailable" ]; then
@@ -614,6 +622,77 @@ OpenAiUnlockTest()
 
 ###########################################
 #                                         #
+#   extra unlock check (ref: IPQuality)   #
+#                                         #
+###########################################
+
+# 以下 3 项检测参考 https://github.com/xykt/IPQuality 的实现
+
+MediaUnlockTest_TikTok() {
+    local tmpresult=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${1} ${ssll} -sL --max-time 15 "https://www.tiktok.com/" 2>&1)
+    if [[ "$tmpresult" == *"Please wait..."* ]]; then
+        tmpresult=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${1} ${ssll} -sL --max-time 15 "https://www.tiktok.com/explore" 2>&1)
+    fi
+
+    if [ -z "$tmpresult" ]; then
+        echo -n -e "\r TikTok:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
+        modifyJsonTemplate 'TikTok_result' 'Unknow'
+        return
+    fi
+
+    local region=$(echo "$tmpresult" | grep -oE '"region"[[:space:]]*:[[:space:]]*"[A-Z]{2}"' | head -n 1 | cut -d '"' -f4)
+    if [ -n "$region" ]; then
+        echo -n -e "\r TikTok:\t\t\t\t${Font_Green}Yes (Region: ${region})${Font_Suffix}\n"
+        modifyJsonTemplate 'TikTok_result' 'Yes' "${region}"
+    else
+        echo -n -e "\r TikTok:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
+        modifyJsonTemplate 'TikTok_result' 'No'
+    fi
+}
+
+MediaUnlockTest_PrimeVideo() {
+    local tmpresult=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${1} ${ssll} -sL --max-time 15 "https://www.primevideo.com" 2>&1)
+
+    if [ -z "$tmpresult" ]; then
+        echo -n -e "\r Amazon Prime Video:\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
+        modifyJsonTemplate 'AmazonPV_result' 'Unknow'
+        return
+    fi
+
+    local region=$(echo "$tmpresult" | grep -oE '"currentTerritory"[[:space:]]*:[[:space:]]*"[A-Z]{2}"' | head -n 1 | cut -d '"' -f4)
+    if [ -n "$region" ]; then
+        echo -n -e "\r Amazon Prime Video:\t\t\t${Font_Green}Yes (Region: ${region})${Font_Suffix}\n"
+        modifyJsonTemplate 'AmazonPV_result' 'Yes' "${region}"
+    else
+        echo -n -e "\r Amazon Prime Video:\t\t\t${Font_Red}No${Font_Suffix}\n"
+        modifyJsonTemplate 'AmazonPV_result' 'No'
+    fi
+}
+
+MediaUnlockTest_Reddit() {
+    local resp=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${1} ${ssll} -fsL --max-time 15 --write-out '\n%{http_code}' "https://www.reddit.com/svc/shreddit/reddit-chat" 2>&1)
+    local http_code=$(printf '%s' "$resp" | tail -n 1 | tr -d '\r')
+    local html=$(printf '%s' "$resp" | sed '$d')
+
+    case "$http_code" in
+        "200")
+            local region=$(printf '%s' "$html" | grep -oE 'country="[^"]+"' | head -n 1 | cut -d '"' -f2)
+            echo -n -e "\r Reddit:\t\t\t\t${Font_Green}Yes (Region: ${region})${Font_Suffix}\n"
+            modifyJsonTemplate 'Reddit_result' 'Yes' "${region}"
+            ;;
+        "403")
+            echo -n -e "\r Reddit:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
+            modifyJsonTemplate 'Reddit_result' 'No'
+            ;;
+        *)
+            echo -n -e "\r Reddit:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
+            modifyJsonTemplate 'Reddit_result' 'Unknow'
+            ;;
+    esac
+}
+
+###########################################
+#                                         #
 #   sspanel unlock check function code    #
 #                                         #
 ###########################################
@@ -628,7 +707,10 @@ createJsonTemplate() {
     "MyTVSuper": "MyTVSuper_result",
     "BBC": "BBC_result",
     "Abema": "AbemaTV_result",
-    "OpenAI": "OpenAI_result"
+    "OpenAI": "OpenAI_result",
+    "TikTok": "TikTok_result",
+    "AmazonPV": "AmazonPV_result",
+    "Reddit": "Reddit_result"
 }' > "${CSM_DIR}/media_test_tpl.json"
 }
 
@@ -751,6 +833,7 @@ printInfo() {
     echo -e "${green_start}Project: https://github.com/RyanRaw/check-stream-media-forsspanel${color_end}"
     echo -e "${green_start}Version: 2026-09-21 v.2.1.0${color_end}"
     echo -e "${green_start}Detect logic synced with upstream check.sh v1.0.1${color_end}"
+    echo -e "${green_start}Extra checks (TikTok / Amazon Prime Video / Reddit) ref: https://github.com/xykt/IPQuality${color_end}"
     echo -e "${green_start}Author: @iamsaltedfish, fork by @RyanRaw${color_end}"
 }
 
@@ -765,6 +848,9 @@ runCheck() {
     MediaUnlockTest_YouTube_Premium 4
     MediaUnlockTest_DisneyPlus 4
     OpenAiUnlockTest
+    MediaUnlockTest_TikTok 4
+    MediaUnlockTest_PrimeVideo 4
+    MediaUnlockTest_Reddit 4
 }
 
 checkData()
