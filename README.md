@@ -23,18 +23,37 @@ The code for this script to detect streaming media unlocking is all from the ope
 
 # 2026-10-14 口径修正：Gemini / Reddit 判不准
 
-## Gemini：此前**所有节点恒判 No**
+## Gemini：从「恒判 No」到「能打开页面 ≠ 能用」
 
-上游 `check.sh`（含本脚本原实现）判 Gemini 的方式是「页面里匹配 `45631641,null,true`」。Google 现在的应用页里**已经没有任何**
-这个标记（实测出口在台湾、Gemini 明确可用时，795KB 页面里命中 **0** 次）→ 旧逻辑必然恒判 `No`，上游至今未修。
+这一项改了两轮，别只看到第一轮：
 
-现改为「看是否真的把应用页发下来了」，三条同时满足才算可用：
+**第一轮（v2.6.1）**：上游 `check.sh`（含本脚本原实现）判 Gemini 的方式是「页面里匹配 `45631641,null,true`」。Google 现在的应用页里
+**已经没有任何**这个标记（实测出口在台湾、Gemini 明确可用时，795KB 页面里命中 **0** 次）→ 旧逻辑必然恒判 `No`（线上 12 个节点全是 `no`），上游至今未修。
 
-1. HTTP 200；
-2. 最终地址没有跳到 `faq` / 不可用页；
-3. 页面里带地区标记 `,2,1,200,"XXX"`（兼容旧的 `45631641` 标记）。
+**第二轮（v2.6.2，重要）**：改成「看页面能不能打开」是**错的** —— `gemini.google.com` 是个 SPA，
+`/`、`/app`、`/faq` 返回**同一个壳**（实测 `/app` 与 `/` 完全一样，795KB），Google 不提供 Gemini 的地区**照样把壳发下来**，
+于是香港 / 澳门这类节点被误判成可用（线上澳门节点就报过 `yes/MO`，而它的出口 Reddit 报的是 `HKG`）。
 
-页面为空 → `Failed (Network Connection)`；拿到页面但被跳到**同意页**（欧洲等地区）→ `Unknow`（比误判 `No` 诚实）。
+真正的地区判定藏在页面内联数据里：
+
+```
+,2,1,200,"XXX"        ← Google 自己判定的三字码地区（实测 TW 出口拿到 TWN）
+```
+
+判据（与社区现行实现 `lff/subs-check` 一致）：
+
+| 情况 | 结果 |
+|---|---|
+| 三字码命中**封禁表** | `No`（页面照样能打开，但实际用不了；输出会带上 Google 判定的地区，便于核对）|
+| 三字码不在封禁表 | `Yes (Region: <出口 IP 二字码>)` |
+| 页面为空 | `Failed (Network Connection)` → `Unknow` |
+| 页面拿到但没有地区码（同意页 / 风控页）| `Unknow`（不谎报可用）|
+
+封禁表 = `CHN RUS BLR CUB IRN PRK SYR HKG MAC`（`GEMINI_BLOCKED_ALPHA3`），都是 Google 官方不提供 Gemini 的地区。
+表变了改这一行即可。
+
+> 顺带说明：`45631641` 这个"功能配置项"现在确实还在页面里，但形态变了 —— 从 `45631641,null,true` 变成转义 JSON 里的开关映射
+> `\"45631641\":true`，且它在可用地区也是 `true` 之外的值时有出现，作为可用性判据并不可靠，故不再使用。
 
 ## Reddit：同一节点忽上忽下
 
@@ -44,8 +63,8 @@ The code for this script to detect streaming media unlocking is all from the ope
 现在：主接口拿不到 `country="XX"` 时，用网页端 `old.reddit.com`（页面里同样写 `country="XX"`）再探一次；
 只有**两次都没拿到地区**才判 `No`，**两次都没响应**才是 `Failed (Network Connection)`。
 
-> 两者修好后在本地（出口台湾）实测均判 `Yes (Region: TW)`；Reddit 的四种控制流（主接口命中 / 403 后网页端救场 / 两次被拒 / 两次无响应）
-> 用 stub 探针逐项验证通过。
+> 验证（v2.6.2，本地出口台湾真跑 + 合成页面）：Gemini 判据单元测试、完整判定链路（TWN→Yes / HKG / MAC / CHN / RUS→No / 无地区码→Unknow /
+> 无响应→Failed）、Reddit 四种控制流，共 **32 项全过**。
 
 # 上报格式
 

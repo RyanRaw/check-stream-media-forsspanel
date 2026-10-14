@@ -595,20 +595,39 @@ OpenAiUnlockTest()
 }
 
 # Google Gemini
-#   ⚠️ 2026-10-14 口径修正: 上游 check.sh 的旧写法是「页面里匹配 '45631641,null,true'」——
-#   Google 现在的应用页里已经**没有**这个标记了(实测 TW 出口、Gemini 明明可用, 页面 795KB 里搜不到),
-#   所以旧逻辑会把所有节点恒判 No(线上 12 个节点全是 no)。上游至今没修。
-#   现在改为看「是否真的把应用页发下来了」, 三个条件同时满足才算可用:
-#     · HTTP 200; · 最终地址没有跳到 faq / 不可用页; · 页面里带地区标记 ,2,1,200,"XXX"(兼容旧的 45631641 标记)
-#   页面为空 = 网络不通; 拿到了页面但没有应用页内容 = 该地区不可用。
+#   ⚠️ 2026-10-14 二次修正(重要): 「能打开页面」根本不能作为可用证据 ——
+#   gemini.google.com 是个 SPA, /app、/faq 都返回**同一个壳**, 不支持的地区照样把壳发下来
+#   (实测: /app 与 / 返回一模一样的 795KB 页面), 所以上一版「页面能打开 + 有地区标记 = Yes」
+#   会把香港/澳门这类 Google 不提供 Gemini 的地区误判成可用(线上澳门节点就报过 yes/MO)。
+#
+#   真正的地区判定藏在页面内联数据里:  ,2,1,200,"XXX"   ← Google 自己判定的三字码地区
+#   (实测 TW 出口拿到 TWN; 不支持的地区会给出 HKG / MAC / CHN 等 —— 页面照发, 但这个码不一样)
+#   判据: 三字码命中封禁表 = No; 未命中 = Yes; 页面为空 = Failed; 页面在但取不到码 = Unknow(不谎报可用)
+#   封禁表取自社区现行实现(lff/subs-check), 都是 Google 官方不提供 Gemini 的地区。
+GEMINI_BLOCKED_ALPHA3="CHN RUS BLR CUB IRN PRK SYR HKG MAC"
+
+# 从已下载的页面里取 Google 对出口 IP 的三字码地区判定(取不到输出空)
+gemini_page_alpha3() {
+    grep -oE ',2,1,200,"[A-Z]{3}"' "$1" 2>/dev/null | head -n 1 | cut -d '"' -f2
+}
+
+# 三字码是否属于 Gemini 封禁地区
+gemini_region_blocked() {
+    local blocked
+
+    for blocked in ${GEMINI_BLOCKED_ALPHA3}; do
+        [ "${blocked}" = "$1" ] && return 0
+    done
+
+    return 1
+}
+
 MediaUnlockTest_Gemini() {
     local page="${CSM_DIR}/gemini_page.html"
-    # 先清掉上一次的残留：否则这次没下载成功时会拿旧文件误判成 Yes
+    # 先清掉上一次的残留：否则这次没下载成功时会拿旧文件误判
     rm -f "${page}"
-    local meta=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${1} ${ssll} -sL --max-time 25 \
-        -o "${page}" --write-out '%{http_code}|%{url_effective}' "https://gemini.google.com" 2>/dev/null)
-    local http_code=$(printf '%s' "${meta}" | cut -d '|' -f1)
-    local final_url=$(printf '%s' "${meta}" | cut -d '|' -f2)
+    curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${1} ${ssll} -sL --max-time 25 \
+        -o "${page}" "https://gemini.google.com" 2>/dev/null
 
     if [ ! -s "${page}" ]; then
         rm -f "${page}"
@@ -617,31 +636,30 @@ MediaUnlockTest_Gemini() {
         return
     fi
 
-    local redirected=$(printf '%s' "${final_url}" | grep -ciE 'faq|unavailable|not[_-]?available')
-    local consent=$(printf '%s' "${final_url}" | grep -ci 'consent')
-    local has_region=$(grep -cE ',2,1,200,"[A-Z]{3}"' "${page}")
-    local legacy_ok=$(grep -c '45631641,null,true' "${page}")
+    local alpha3=$(gemini_page_alpha3 "${page}")
     rm -f "${page}"
 
-    if [ "${http_code}" = "200" ] && [ "${redirected}" -eq 0 ] \
-        && { [ "${has_region}" -gt 0 ] || [ "${legacy_ok}" -gt 0 ]; }; then
+    # Google 判你在 Gemini 封禁地区(HK / MO / CN ...): 页面能打开, 但实际用不了
+    if [ -n "${alpha3}" ] && gemini_region_blocked "${alpha3}"; then
+        echo -n -e "\r Google Gemini:\t\t\t${Font_Red}No${Font_Suffix} ${Font_SkyBlue}(Google 判定地区: ${alpha3})${Font_Suffix}\n"
+        modifyJsonTemplate 'Gemini_result' 'No'
+        return
+    fi
+
+    if [ -n "${alpha3}" ]; then
         local ip="${local_ipv4}"
         [ -z "${ip}" ] && ip=$(getPublicIP 4)
         local region=$(getCountryCode "${ip}")
+        # 归属地查询拿不到时退回 Google 判定的三字码, 别上报空地区
+        [ -z "${region}" ] && region="${alpha3}"
         echo -n -e "\r Google Gemini:\t\t\t${Font_Green}Yes (Region: ${region})${Font_Suffix}\n"
         modifyJsonTemplate 'Gemini_result' 'Yes' "${region}"
         return
     fi
 
-    # 欧洲等地区 Google 会先把请求跳到同意页, 页面里没有应用数据 —— 这种判 Unknow 比误判 No 诚实
-    if [ "${consent}" -gt 0 ]; then
-        echo -n -e "\r Google Gemini:\t\t\t${Font_SkyBlue}Unknow (consent page)${Font_Suffix}\n"
-        modifyJsonTemplate 'Gemini_result' 'Unknow'
-        return
-    fi
-
-    echo -n -e "\r Google Gemini:\t\t\t${Font_Red}No${Font_Suffix}\n"
-    modifyJsonTemplate 'Gemini_result' 'No'
+    # 页面在(能连通)但取不到地区码: 可能被跳到同意页/风控页 —— 不谎报可用
+    echo -n -e "\r Google Gemini:\t\t\t${Font_SkyBlue}Unknow (region not found)${Font_Suffix}\n"
+    modifyJsonTemplate 'Gemini_result' 'Unknow'
 }
 
 ###########################################
@@ -1213,7 +1231,7 @@ printInfo() {
     echo -e "${green_start}The code for this script to detect streaming media unlocking is all from the open source project https://github.com/lmc999/RegionRestrictionCheck , and the open source protocol is AGPL-3.0. This script is open source as required by the open source license. Thanks to the original author @lmc999 and everyone who made the pull request for this project for their contributions.${color_end}"
     echo
     echo -e "${green_start}Project: https://github.com/RyanRaw/check-stream-media-forsspanel${color_end}"
-    echo -e "${green_start}Version: 2026-10-14 v.2.6.1${color_end}"
+    echo -e "${green_start}Version: 2026-10-14 v.2.6.2${color_end}"
     echo -e "${green_start}Detect logic synced with upstream check.sh v1.0.1${color_end}"
     echo -e "${green_start}Extra checks (TikTok / Amazon Prime Video / Reddit) ref: https://github.com/xykt/IPQuality${color_end}"
     echo -e "${green_start}Author: @iamsaltedfish, fork by @RyanRaw${color_end}"
