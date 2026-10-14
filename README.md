@@ -17,7 +17,7 @@ The code for this script to detect streaming media unlocking is all from the ope
 | `IPRisk` | 字符串 | `Low` / `Medium`（机房）/ `High`（VPN/代理/Tor）/ `unknown`（仅兜底源可用） | 由 `hosting/proxy/vpn/tor` 推导 |
 | `UsageRegion` | 对象 | 使用地：`{"code":"JP","name":"日本","continent":"AS","continent_name":"亚洲"}` | ipinfo 使用地 + `reference/region_zh.tsv` |
 | `RegisteredRegion` | 对象 | 注册地：`{"code":"ZA","name":"南非"}` | RIR 注册国（RDAP）+ `reference/region_zh.tsv` |
-| `GoogleRegion` | 字符串 | Google 对出口 IP 的地区判定（两位码，如 `US`；判成 `CN` 即俗称的**送中**） | YouTube 首页 `ytInitialData.countryCode`（**Google 自己的判定**），失败回退 YouTube Premium 页；取不到上报空串 |
+| `GoogleRegion` | 字符串 | Google 对出口 IP 的地区判定（两位码，如 `US`；判成 `CN` 即俗称的**送中**） | 源1 YouTube 首页 `ytInitialData.countryCode` → 源2 YouTube Premium 页 → 源3 **Gemini 页里的三字码**（查 ISO 表转二字码）；三源都取不到才上报空串（详见下文）|
 
 出口 IP 由 `api64.ipify.org`、`api.ip.sb`、`ipinfo.io/ip`、`ifconfig.me`、`ip-api.com` 多源兜底获取（IPv4 优先，失败再试 IPv6）。`UnlockType` 为纯本地判定；其余字段需要外部查询，依次尝试 `ipinfo.io/widget/demo` → `ip-api.com`（仅 IPv4）→ `api.ip.sb`（仅运营商信息，此时 `IPRisk` 为 `unknown`）；全部失败时 `IPType` / `IPattributes` 为空字符串、地区对象为 `null`，不影响其余检测与上报。`GoogleRegion` 是唯一取自「Google 自己」的字段（其余归属地来自 ipinfo / RIR）：判成 `CN` 时面板解锁页会把该节点标红。
 
@@ -54,6 +54,18 @@ The code for this script to detect streaming media unlocking is all from the ope
 
 > 顺带说明：`45631641` 这个"功能配置项"现在确实还在页面里，但形态变了 —— 从 `45631641,null,true` 变成转义 JSON 里的开关映射
 > `\"45631641\":true`，且它在可用地区也是 `true` 之外的值时有出现，作为可用性判据并不可靠，故不再使用。
+
+## GoogleRegion（送中检测）：最该标红的节点反而取不到值
+
+`GoogleRegion` 原来只认 YouTube 的两条来源（首页 / Premium 页）。但实测发现：**被 Google 判成 CN 的 IP，这两条请求往往直接被拦或返回精简页** ——
+于是「最该标红的送中节点」恰恰是唯一没有徽章的节点（线上 10 台里只有 4 台有值）。
+
+现增加**源3**：复用 Gemini 检测时从 Gemini 页取到的三字码 `,2,1,200,"XXX"`（同样是 Google 自己的判定），
+查内置的 ISO 3166-1 表（`GOOGLE_ALPHA3_ALPHA2`，**249 条完整表**，由系统 `iso-codes` 生成、并与之一条条比对过）转成二字码。
+
+- 优先级：YouTube 首页 → YouTube Premium → Gemini 页三字码；控制台输出会标注 `(via YouTube)` / `(via Gemini)` 便于核对。
+- 三字码只在本次运行内复用（`GEMINI_ALPHA3` 全局变量），**不额外发请求**。
+- 三源都取不到 → 仍上报空串（面板不显示徽章），不会瞎猜一个地区。
 
 ## Reddit：同一节点忽上忽下
 

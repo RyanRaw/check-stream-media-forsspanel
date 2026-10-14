@@ -606,6 +606,12 @@ OpenAiUnlockTest()
 #   封禁表取自社区现行实现(lff/subs-check), 都是 Google 官方不提供 Gemini 的地区。
 GEMINI_BLOCKED_ALPHA3="CHN RUS BLR CUB IRN PRK SYR HKG MAC"
 
+# 本次 Gemini 检测里 Google 判定的三字码(供后面的 GoogleRegion 兜底用, 避免重复请求)
+GEMINI_ALPHA3=""
+
+# ISO 3166-1 三字码 → 二字码(数据取自系统 iso-codes, 249 条完整表, 用于 GoogleRegion 兜底)
+GOOGLE_ALPHA3_ALPHA2="ABW=AW AFG=AF AGO=AO AIA=AI ALA=AX ALB=AL AND=AD ARE=AE ARG=AR ARM=AM ASM=AS ATA=AQ ATF=TF ATG=AG AUS=AU AUT=AT AZE=AZ BDI=BI BEL=BE BEN=BJ BES=BQ BFA=BF BGD=BD BGR=BG BHR=BH BHS=BS BIH=BA BLM=BL BLR=BY BLZ=BZ BMU=BM BOL=BO BRA=BR BRB=BB BRN=BN BTN=BT BVT=BV BWA=BW CAF=CF CAN=CA CCK=CC CHE=CH CHL=CL CHN=CN CIV=CI CMR=CM COD=CD COG=CG COK=CK COL=CO COM=KM CPV=CV CRI=CR CUB=CU CUW=CW CXR=CX CYM=KY CYP=CY CZE=CZ DEU=DE DJI=DJ DMA=DM DNK=DK DOM=DO DZA=DZ ECU=EC EGY=EG ERI=ER ESH=EH ESP=ES EST=EE ETH=ET FIN=FI FJI=FJ FLK=FK FRA=FR FRO=FO FSM=FM GAB=GA GBR=GB GEO=GE GGY=GG GHA=GH GIB=GI GIN=GN GLP=GP GMB=GM GNB=GW GNQ=GQ GRC=GR GRD=GD GRL=GL GTM=GT GUF=GF GUM=GU GUY=GY HKG=HK HMD=HM HND=HN HRV=HR HTI=HT HUN=HU IDN=ID IMN=IM IND=IN IOT=IO IRL=IE IRN=IR IRQ=IQ ISL=IS ISR=IL ITA=IT JAM=JM JEY=JE JOR=JO JPN=JP KAZ=KZ KEN=KE KGZ=KG KHM=KH KIR=KI KNA=KN KOR=KR KWT=KW LAO=LA LBN=LB LBR=LR LBY=LY LCA=LC LIE=LI LKA=LK LSO=LS LTU=LT LUX=LU LVA=LV MAC=MO MAF=MF MAR=MA MCO=MC MDA=MD MDG=MG MDV=MV MEX=MX MHL=MH MKD=MK MLI=ML MLT=MT MMR=MM MNE=ME MNG=MN MNP=MP MOZ=MZ MRT=MR MSR=MS MTQ=MQ MUS=MU MWI=MW MYS=MY MYT=YT NAM=NA NCL=NC NER=NE NFK=NF NGA=NG NIC=NI NIU=NU NLD=NL NOR=NO NPL=NP NRU=NR NZL=NZ OMN=OM PAK=PK PAN=PA PCN=PN PER=PE PHL=PH PLW=PW PNG=PG POL=PL PRI=PR PRK=KP PRT=PT PRY=PY PSE=PS PYF=PF QAT=QA REU=RE ROU=RO RUS=RU RWA=RW SAU=SA SDN=SD SEN=SN SGP=SG SGS=GS SHN=SH SJM=SJ SLB=SB SLE=SL SLV=SV SMR=SM SOM=SO SPM=PM SRB=RS SSD=SS STP=ST SUR=SR SVK=SK SVN=SI SWE=SE SWZ=SZ SXM=SX SYC=SC SYR=SY TCA=TC TCD=TD TGO=TG THA=TH TJK=TJ TKL=TK TKM=TM TLS=TL TON=TO TTO=TT TUN=TN TUR=TR TUV=TV TWN=TW TZA=TZ UGA=UG UKR=UA UMI=UM URY=UY USA=US UZB=UZ VAT=VA VCT=VC VEN=VE VGB=VG VIR=VI VNM=VN VUT=VU WLF=WF WSM=WS YEM=YE ZAF=ZA ZMB=ZM ZWE=ZW"
+
 # 从已下载的页面里取 Google 对出口 IP 的三字码地区判定(取不到输出空)
 gemini_page_alpha3() {
     grep -oE ',2,1,200,"[A-Z]{3}"' "$1" 2>/dev/null | head -n 1 | cut -d '"' -f2
@@ -617,6 +623,20 @@ gemini_region_blocked() {
 
     for blocked in ${GEMINI_BLOCKED_ALPHA3}; do
         [ "${blocked}" = "$1" ] && return 0
+    done
+
+    return 1
+}
+
+# 三字码 → 二字码(查不到输出空)
+alpha3_to_alpha2() {
+    local pair
+
+    for pair in ${GOOGLE_ALPHA3_ALPHA2}; do
+        if [ "${pair%%=*}" = "$1" ]; then
+            printf '%s\n' "${pair#*=}"
+            return 0
+        fi
     done
 
     return 1
@@ -638,6 +658,9 @@ MediaUnlockTest_Gemini() {
 
     local alpha3=$(gemini_page_alpha3 "${page}")
     rm -f "${page}"
+
+    # 记下来给后面的 GoogleRegion 兜底(那一步原本只认 YouTube, 送中节点上两条 YouTube 源都拿不到)
+    GEMINI_ALPHA3="${alpha3}"
 
     # Google 判你在 Gemini 封禁地区(HK / MO / CN ...): 页面能打开, 但实际用不了
     if [ -n "${alpha3}" ] && gemini_region_blocked "${alpha3}"; then
@@ -1000,9 +1023,11 @@ MediaUnlockTest_IPAttribute() {
 # Google 对出口 IP 的地区判定(俗称「送中」)
 #   YouTube 首页 ytInitialData 里的 countryCode 就是 Google 自己的判定结果;
 #   判成 CN 时面板解锁页会把该节点标红 —— YouTube Premium / Gemini 等按地区限制的服务会认为你在国内而不可用。
-#   取不到(YouTube 不通/被墙)时上报空串, 面板侧就不显示这个徽章, 不影响其余检测。
+#   ⚠️ 2026-10-14 补兜底: 被 Google 判成 CN/受限地区的 IP, YouTube 这两条请求往往直接被拦或返回精简页
+#   (实测送中节点上两条 YouTube 源都拿不到), 结果最该标红的节点反而没徽章。
+#   现增加源3: 复用 Gemini 检测时从 Gemini 页取到的三字码(那也是 Google 自己的判定), 查表转二字码。
 MediaUnlockTest_GoogleRegion() {
-    local code="" resp=""
+    local code="" resp="" from="YouTube"
 
     # 源1: YouTube 首页
     resp=$(curl -s --max-time 12 ${ssll} --user-agent "${UA_Browser}" "https://www.youtube.com/" 2>/dev/null)
@@ -1012,6 +1037,12 @@ MediaUnlockTest_GoogleRegion() {
     if [ -z "${code}" ]; then
         resp=$(curl -s --max-time 12 ${ssll} --user-agent "${UA_Browser}" "https://www.youtube.com/premium" 2>/dev/null)
         code=$(printf '%s' "${resp}" | grep -oE '"countryCode":"[A-Za-z]{2}"' | head -1 | cut -d '"' -f4)
+    fi
+
+    # 源3: Gemini 页里 Google 判定的三字码(这次 Gemini 检测顺手记下的), 转成二字码
+    if [ -z "${code}" ] && [ -n "${GEMINI_ALPHA3}" ]; then
+        code=$(alpha3_to_alpha2 "${GEMINI_ALPHA3}")
+        [ -n "${code}" ] && from="Gemini"
     fi
 
     if [ -z "${code}" ]; then
@@ -1029,7 +1060,7 @@ MediaUnlockTest_GoogleRegion() {
         note=" ${Font_Red}(送中)${Font_Suffix}"
     fi
 
-    echo -n -e "\r Google Region:\t\t\t${color}${code}${Font_Suffix} ${Font_SkyBlue}$(getRegionName "${code}" 2)${Font_Suffix}${note}\n"
+    echo -n -e "\r Google Region:\t\t\t${color}${code}${Font_Suffix} ${Font_SkyBlue}$(getRegionName "${code}" 2)${Font_Suffix}${note}${Font_SkyBlue} (via ${from})${Font_Suffix}\n"
 }
 
 ###########################################
@@ -1231,7 +1262,7 @@ printInfo() {
     echo -e "${green_start}The code for this script to detect streaming media unlocking is all from the open source project https://github.com/lmc999/RegionRestrictionCheck , and the open source protocol is AGPL-3.0. This script is open source as required by the open source license. Thanks to the original author @lmc999 and everyone who made the pull request for this project for their contributions.${color_end}"
     echo
     echo -e "${green_start}Project: https://github.com/RyanRaw/check-stream-media-forsspanel${color_end}"
-    echo -e "${green_start}Version: 2026-10-14 v.2.6.2${color_end}"
+    echo -e "${green_start}Version: 2026-10-14 v.2.6.3${color_end}"
     echo -e "${green_start}Detect logic synced with upstream check.sh v1.0.1${color_end}"
     echo -e "${green_start}Extra checks (TikTok / Amazon Prime Video / Reddit) ref: https://github.com/xykt/IPQuality${color_end}"
     echo -e "${green_start}Author: @iamsaltedfish, fork by @RyanRaw${color_end}"
