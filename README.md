@@ -21,6 +21,32 @@ The code for this script to detect streaming media unlocking is all from the ope
 
 出口 IP 由 `api64.ipify.org`、`api.ip.sb`、`ipinfo.io/ip`、`ifconfig.me`、`ip-api.com` 多源兜底获取（IPv4 优先，失败再试 IPv6）。`UnlockType` 为纯本地判定；其余字段需要外部查询，依次尝试 `ipinfo.io/widget/demo` → `ip-api.com`（仅 IPv4）→ `api.ip.sb`（仅运营商信息，此时 `IPRisk` 为 `unknown`）；全部失败时 `IPType` / `IPattributes` 为空字符串、地区对象为 `null`，不影响其余检测与上报。`GoogleRegion` 是唯一取自「Google 自己」的字段（其余归属地来自 ipinfo / RIR）：判成 `CN` 时面板解锁页会把该节点标红。
 
+# 2026-10-14 口径修正：Gemini / Reddit 判不准
+
+## Gemini：此前**所有节点恒判 No**
+
+上游 `check.sh`（含本脚本原实现）判 Gemini 的方式是「页面里匹配 `45631641,null,true`」。Google 现在的应用页里**已经没有任何**
+这个标记（实测出口在台湾、Gemini 明确可用时，795KB 页面里命中 **0** 次）→ 旧逻辑必然恒判 `No`，上游至今未修。
+
+现改为「看是否真的把应用页发下来了」，三条同时满足才算可用：
+
+1. HTTP 200；
+2. 最终地址没有跳到 `faq` / 不可用页；
+3. 页面里带地区标记 `,2,1,200,"XXX"`（兼容旧的 `45631641` 标记）。
+
+页面为空 → `Failed (Network Connection)`；拿到页面但被跳到**同意页**（欧洲等地区）→ `Unknow`（比误判 `No` 诚实）。
+
+## Reddit：同一节点忽上忽下
+
+原实现只认 `/svc/shreddit/reddit-chat` 的 `200` / `403`，且把 **403 直接判成 `No`**。但 Reddit 对机房 IP 会**不定时**回 403（反爬/限流），
+与「该地区是否可用」无关 —— 线上实测同一个纽约节点 08:00 报 `yes/US`、12:00 报 `no`，就是被这个 403 打的。
+
+现在：主接口拿不到 `country="XX"` 时，用网页端 `old.reddit.com`（页面里同样写 `country="XX"`）再探一次；
+只有**两次都没拿到地区**才判 `No`，**两次都没响应**才是 `Failed (Network Connection)`。
+
+> 两者修好后在本地（出口台湾）实测均判 `Yes (Region: TW)`；Reddit 的四种控制流（主接口命中 / 403 后网页端救场 / 两次被拒 / 两次无响应）
+> 用 stub 探针逐项验证通过。
+
 # 上报格式
 
 接口：`POST {面板地址}/mod_mu/media/save_report?key={mu_key}&node_id={节点ID}`，鉴权使用 URL 查询参数 `key`（面板不读请求头，该参数不可省略）；同时附带节点 Token 请求头 `X-Node-Token`（取值见 `.csm.config` 第 4 行，留空时回退使用 mu key）；body 为 `content=base64(JSON)`，用 `--data-urlencode` 提交（base64 中的 `+` 会被正确编码并在面板侧还原）。失败时自动回退旧接口名 `saveReport`。

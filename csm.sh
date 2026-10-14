@@ -594,28 +594,54 @@ OpenAiUnlockTest()
     modifyJsonTemplate 'OpenAI_result' 'APP' "${region}"
 }
 
-# Google Gemini: 参考上游 check.sh 的 WebTest_Gemini, 页面含可用标记即为解锁
+# Google Gemini
+#   ⚠️ 2026-10-14 口径修正: 上游 check.sh 的旧写法是「页面里匹配 '45631641,null,true'」——
+#   Google 现在的应用页里已经**没有**这个标记了(实测 TW 出口、Gemini 明明可用, 页面 795KB 里搜不到),
+#   所以旧逻辑会把所有节点恒判 No(线上 12 个节点全是 no)。上游至今没修。
+#   现在改为看「是否真的把应用页发下来了」, 三个条件同时满足才算可用:
+#     · HTTP 200; · 最终地址没有跳到 faq / 不可用页; · 页面里带地区标记 ,2,1,200,"XXX"(兼容旧的 45631641 标记)
+#   页面为空 = 网络不通; 拿到了页面但没有应用页内容 = 该地区不可用。
 MediaUnlockTest_Gemini() {
-    local tmpresult=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${1} ${ssll} -sL --max-time 25 "https://gemini.google.com" 2>&1)
+    local page="${CSM_DIR}/gemini_page.html"
+    # 先清掉上一次的残留：否则这次没下载成功时会拿旧文件误判成 Yes
+    rm -f "${page}"
+    local meta=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${1} ${ssll} -sL --max-time 25 \
+        -o "${page}" --write-out '%{http_code}|%{url_effective}' "https://gemini.google.com" 2>/dev/null)
+    local http_code=$(printf '%s' "${meta}" | cut -d '|' -f1)
+    local final_url=$(printf '%s' "${meta}" | cut -d '|' -f2)
 
-    if [ -z "$tmpresult" ]; then
+    if [ ! -s "${page}" ]; then
+        rm -f "${page}"
         echo -n -e "\r Google Gemini:\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
         modifyJsonTemplate 'Gemini_result' 'Unknow'
         return
     fi
 
-    local isOK=$(echo "$tmpresult" | grep -c '45631641,null,true')
+    local redirected=$(printf '%s' "${final_url}" | grep -ciE 'faq|unavailable|not[_-]?available')
+    local consent=$(printf '%s' "${final_url}" | grep -ci 'consent')
+    local has_region=$(grep -cE ',2,1,200,"[A-Z]{3}"' "${page}")
+    local legacy_ok=$(grep -c '45631641,null,true' "${page}")
+    rm -f "${page}"
 
-    if [ "${isOK}" -gt 0 ]; then
+    if [ "${http_code}" = "200" ] && [ "${redirected}" -eq 0 ] \
+        && { [ "${has_region}" -gt 0 ] || [ "${legacy_ok}" -gt 0 ]; }; then
         local ip="${local_ipv4}"
         [ -z "${ip}" ] && ip=$(getPublicIP 4)
         local region=$(getCountryCode "${ip}")
         echo -n -e "\r Google Gemini:\t\t\t${Font_Green}Yes (Region: ${region})${Font_Suffix}\n"
         modifyJsonTemplate 'Gemini_result' 'Yes' "${region}"
-    else
-        echo -n -e "\r Google Gemini:\t\t\t${Font_Red}No${Font_Suffix}\n"
-        modifyJsonTemplate 'Gemini_result' 'No'
+        return
     fi
+
+    # 欧洲等地区 Google 会先把请求跳到同意页, 页面里没有应用数据 —— 这种判 Unknow 比误判 No 诚实
+    if [ "${consent}" -gt 0 ]; then
+        echo -n -e "\r Google Gemini:\t\t\t${Font_SkyBlue}Unknow (consent page)${Font_Suffix}\n"
+        modifyJsonTemplate 'Gemini_result' 'Unknow'
+        return
+    fi
+
+    echo -n -e "\r Google Gemini:\t\t\t${Font_Red}No${Font_Suffix}\n"
+    modifyJsonTemplate 'Gemini_result' 'No'
 }
 
 ###########################################
@@ -667,26 +693,51 @@ MediaUnlockTest_PrimeVideo() {
     fi
 }
 
+# Reddit
+#   ⚠️ 2026-10-14 口径修正: 原来只认 /svc/shreddit/reddit-chat 的 200 / 403(403 直接判 No)。
+#   但 Reddit 对机房 IP 会不定时回 403(反爬/限流), 与「该地区是否可用」无关 ——
+#   线上实测同一个纽约节点 08:00 报 yes/US、12:00 报 no, 就是被这个 403 打的。
+#   现在: 主接口拿不到地区时, 用网页端(old.reddit.com, 页面里同样写 country="XX")再探一次;
+#   只有两次都没拿到地区才判 No, 两次都没响应才是 Failed (Network Connection)。
 MediaUnlockTest_Reddit() {
-    local resp=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${1} ${ssll} -fsL --max-time 15 --write-out '\n%{http_code}' "https://www.reddit.com/svc/shreddit/reddit-chat" 2>&1)
-    local http_code=$(printf '%s' "$resp" | tail -n 1 | tr -d '\r')
-    local html=$(printf '%s' "$resp" | sed '$d')
+    local first second code got_body="0"
 
-    case "$http_code" in
-        "200")
-            local region=$(printf '%s' "$html" | grep -oE 'country="[^"]+"' | head -n 1 | cut -d '"' -f2)
-            echo -n -e "\r Reddit:\t\t\t\t${Font_Green}Yes (Region: ${region})${Font_Suffix}\n"
-            modifyJsonTemplate 'Reddit_result' 'Yes' "${region}"
-            ;;
-        "403")
-            echo -n -e "\r Reddit:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
-            modifyJsonTemplate 'Reddit_result' 'No'
-            ;;
-        *)
-            echo -n -e "\r Reddit:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
-            modifyJsonTemplate 'Reddit_result' 'Unknow'
-            ;;
-    esac
+    # 主接口: 200 且拿到 country="XX" 最准
+    first=$(reddit_probe_region 'https://www.reddit.com/svc/shreddit/reddit-chat' "${1}")
+    code=$(printf '%s' "${first}" | sed -n '1p')
+    [ "$(printf '%s' "${first}" | sed -n '2p')" = "1" ] && got_body="1"
+
+    # 拿不到地区就当反爬拦截处理, 用老的网页端再探一次(它同样会在页面里写 country="XX")
+    if [ -z "${code}" ]; then
+        second=$(reddit_probe_region 'https://old.reddit.com/' "${1}")
+        code=$(printf '%s' "${second}" | sed -n '1p')
+        [ "$(printf '%s' "${second}" | sed -n '2p')" = "1" ] && got_body="1"
+    fi
+
+    if [ -n "${code}" ]; then
+        echo -n -e "\r Reddit:\t\t\t\t${Font_Green}Yes (Region: ${code})${Font_Suffix}\n"
+        modifyJsonTemplate 'Reddit_result' 'Yes' "${code}"
+        return
+    fi
+
+    # 两次都完全没有响应 → 网络不通; 有响应但都被拒 → 该 IP/地区用不了
+    if [ "${got_body}" = "0" ]; then
+        echo -n -e "\r Reddit:\t\t\t\t${Font_Red}Failed (Network Connection)${Font_Suffix}\n"
+        modifyJsonTemplate 'Reddit_result' 'Unknow'
+        return
+    fi
+
+    echo -n -e "\r Reddit:\t\t\t\t${Font_Red}No${Font_Suffix}\n"
+    modifyJsonTemplate 'Reddit_result' 'No'
+}
+
+# Reddit 探针: 第 1 行输出地区码(取不到为空), 第 2 行输出 1/0 表示「有没有拿到响应体」
+reddit_probe_region() {
+    local url=$1
+    local resp=$(curl $useNIC $usePROXY $xForward --user-agent "${UA_Browser}" -${2} ${ssll} -sL --max-time 15 "$url" 2>/dev/null)
+    local code=$(printf '%s' "${resp}" | grep -oE 'country="[A-Za-z]{2}"' | head -n 1 | cut -d '"' -f2)
+
+    printf '%s\n' "${code}" "$([ -n "${resp}" ] && echo 1 || echo 0)"
 }
 
 ###########################################
@@ -1162,7 +1213,7 @@ printInfo() {
     echo -e "${green_start}The code for this script to detect streaming media unlocking is all from the open source project https://github.com/lmc999/RegionRestrictionCheck , and the open source protocol is AGPL-3.0. This script is open source as required by the open source license. Thanks to the original author @lmc999 and everyone who made the pull request for this project for their contributions.${color_end}"
     echo
     echo -e "${green_start}Project: https://github.com/RyanRaw/check-stream-media-forsspanel${color_end}"
-    echo -e "${green_start}Version: 2026-10-14 v.2.6.0${color_end}"
+    echo -e "${green_start}Version: 2026-10-14 v.2.6.1${color_end}"
     echo -e "${green_start}Detect logic synced with upstream check.sh v1.0.1${color_end}"
     echo -e "${green_start}Extra checks (TikTok / Amazon Prime Video / Reddit) ref: https://github.com/xykt/IPQuality${color_end}"
     echo -e "${green_start}Author: @iamsaltedfish, fork by @RyanRaw${color_end}"
