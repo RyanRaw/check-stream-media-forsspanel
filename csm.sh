@@ -928,6 +928,41 @@ MediaUnlockTest_IPAttribute() {
     echo -n -e "\r Registered Region:\t\t\t${reg_code} ${Font_SkyBlue}$(getRegionName "${reg_code}" 2)${Font_Suffix}\n"
 }
 
+# Google 对出口 IP 的地区判定(俗称「送中」)
+#   YouTube 首页 ytInitialData 里的 countryCode 就是 Google 自己的判定结果;
+#   判成 CN 时面板解锁页会把该节点标红 —— YouTube Premium / Gemini 等按地区限制的服务会认为你在国内而不可用。
+#   取不到(YouTube 不通/被墙)时上报空串, 面板侧就不显示这个徽章, 不影响其余检测。
+MediaUnlockTest_GoogleRegion() {
+    local code="" resp=""
+
+    # 源1: YouTube 首页
+    resp=$(curl -s --max-time 12 ${ssll} --user-agent "${UA_Browser}" "https://www.youtube.com/" 2>/dev/null)
+    code=$(printf '%s' "${resp}" | grep -oE '"countryCode":"[A-Za-z]{2}"' | head -1 | cut -d '"' -f4)
+
+    # 源2: 首页偶尔返回精简页(没有 ytInitialData), 用 Premium 页兜底
+    if [ -z "${code}" ]; then
+        resp=$(curl -s --max-time 12 ${ssll} --user-agent "${UA_Browser}" "https://www.youtube.com/premium" 2>/dev/null)
+        code=$(printf '%s' "${resp}" | grep -oE '"countryCode":"[A-Za-z]{2}"' | head -1 | cut -d '"' -f4)
+    fi
+
+    if [ -z "${code}" ]; then
+        setStringResult 'GoogleRegion_result' ''
+        echo -n -e "\r Google Region:\t\t\t${Font_SkyBlue}Unknow${Font_Suffix}\n"
+        return
+    fi
+
+    code=$(printf '%s' "${code}" | tr '[:lower:]' '[:upper:]')
+    setStringResult 'GoogleRegion_result' "${code}"
+
+    local color="${Font_Green}" note=""
+    if [ "${code}" = "CN" ]; then
+        color="${Font_Red}"
+        note=" ${Font_Red}(送中)${Font_Suffix}"
+    fi
+
+    echo -n -e "\r Google Region:\t\t\t${color}${code}${Font_Suffix} ${Font_SkyBlue}$(getRegionName "${code}" 2)${Font_Suffix}${note}\n"
+}
+
 ###########################################
 #                                         #
 #   sspanel unlock check function code    #
@@ -954,7 +989,8 @@ createJsonTemplate() {
     "IPattributes": IPattributes_result,
     "IPRisk": IPRisk_result,
     "UsageRegion": UsageRegion_result,
-    "RegisteredRegion": RegisteredRegion_result
+    "RegisteredRegion": RegisteredRegion_result,
+    "GoogleRegion": GoogleRegion_result
 }' > "${CSM_DIR}/media_test_tpl.json"
 }
 
@@ -1126,7 +1162,7 @@ printInfo() {
     echo -e "${green_start}The code for this script to detect streaming media unlocking is all from the open source project https://github.com/lmc999/RegionRestrictionCheck , and the open source protocol is AGPL-3.0. This script is open source as required by the open source license. Thanks to the original author @lmc999 and everyone who made the pull request for this project for their contributions.${color_end}"
     echo
     echo -e "${green_start}Project: https://github.com/RyanRaw/check-stream-media-forsspanel${color_end}"
-    echo -e "${green_start}Version: 2026-09-21 v.2.5.0${color_end}"
+    echo -e "${green_start}Version: 2026-10-14 v.2.6.0${color_end}"
     echo -e "${green_start}Detect logic synced with upstream check.sh v1.0.1${color_end}"
     echo -e "${green_start}Extra checks (TikTok / Amazon Prime Video / Reddit) ref: https://github.com/xykt/IPQuality${color_end}"
     echo -e "${green_start}Author: @iamsaltedfish, fork by @RyanRaw${color_end}"
@@ -1150,6 +1186,8 @@ runCheck() {
     MediaUnlockTest_PrimeVideo 4
     MediaUnlockTest_Reddit 4
     MediaUnlockTest_IPAttribute
+    # Google 地区判定(送中检测): 放在 IP 维度之后, 取不到时上报空串
+    MediaUnlockTest_GoogleRegion
 }
 
 checkData()

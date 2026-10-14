@@ -17,8 +17,9 @@ The code for this script to detect streaming media unlocking is all from the ope
 | `IPRisk` | 字符串 | `Low` / `Medium`（机房）/ `High`（VPN/代理/Tor）/ `unknown`（仅兜底源可用） | 由 `hosting/proxy/vpn/tor` 推导 |
 | `UsageRegion` | 对象 | 使用地：`{"code":"JP","name":"日本","continent":"AS","continent_name":"亚洲"}` | ipinfo 使用地 + `reference/region_zh.tsv` |
 | `RegisteredRegion` | 对象 | 注册地：`{"code":"ZA","name":"南非"}` | RIR 注册国（RDAP）+ `reference/region_zh.tsv` |
+| `GoogleRegion` | 字符串 | Google 对出口 IP 的地区判定（两位码，如 `US`；判成 `CN` 即俗称的**送中**） | YouTube 首页 `ytInitialData.countryCode`（**Google 自己的判定**），失败回退 YouTube Premium 页；取不到上报空串 |
 
-出口 IP 由 `api64.ipify.org`、`api.ip.sb`、`ipinfo.io/ip`、`ifconfig.me`、`ip-api.com` 多源兜底获取（IPv4 优先，失败再试 IPv6）。`UnlockType` 为纯本地判定；其余字段需要外部查询，依次尝试 `ipinfo.io/widget/demo` → `ip-api.com`（仅 IPv4）→ `api.ip.sb`（仅运营商信息，此时 `IPRisk` 为 `unknown`）；全部失败时 `IPType` / `IPattributes` 为空字符串、地区对象为 `null`，不影响其余检测与上报。
+出口 IP 由 `api64.ipify.org`、`api.ip.sb`、`ipinfo.io/ip`、`ifconfig.me`、`ip-api.com` 多源兜底获取（IPv4 优先，失败再试 IPv6）。`UnlockType` 为纯本地判定；其余字段需要外部查询，依次尝试 `ipinfo.io/widget/demo` → `ip-api.com`（仅 IPv4）→ `api.ip.sb`（仅运营商信息，此时 `IPRisk` 为 `unknown`）；全部失败时 `IPType` / `IPattributes` 为空字符串、地区对象为 `null`，不影响其余检测与上报。`GoogleRegion` 是唯一取自「Google 自己」的字段（其余归属地来自 ipinfo / RIR）：判成 `CN` 时面板解锁页会把该节点标红。
 
 # 上报格式
 
@@ -43,7 +44,8 @@ The code for this script to detect streaming media unlocking is all from the ope
   "IPattributes": "host",
   "IPRisk":     "Low",
   "UsageRegion":      {"code": "JP", "name": "日本", "continent": "AS", "continent_name": "亚洲"},
-  "RegisteredRegion": {"code": "ZA", "name": "南非"}
+  "RegisteredRegion": {"code": "ZA", "name": "南非"},
+  "GoogleRegion":     "US"
 }
 ```
 
@@ -52,6 +54,21 @@ The code for this script to detect streaming media unlocking is all from the ope
 | `status` | `yes` / `no` / `soon`（Disney+ 即将上线）/ `web`（ChatGPT 仅网页可用）/ `app`（ChatGPT 仅 APP 可用）/ `unknown`（网络异常） |
 | `region` | 区服码（`US`、`TW`、`MO`…；ChatGPT 取出口 IP 所在地区），或描述值：`oversea`（Abema 海外可用）、`originals`（Netflix 仅自制剧）、`banned`（Disney+ 封禁 IP） |
 | `type` | `native`（DNS 未被污染）/ `dns`（DNS 被劫持），取自 `UnlockType` 检测 |
+
+# 送中（Google 判 CN）
+
+`GoogleRegion` 判成 `CN` 时，面板解锁页会在该节点标题旁标红 **`Google 判定：中国大陆 (CN) · 送中`** ——
+此时 YouTube Premium、Gemini 等按地区限制的服务会认为你在中国大陆而不可用。
+
+判定取自 **Google 自己的数据**：YouTube 首页 `ytInitialData` 里的 `countryCode`（实测：出口在台湾时返回 `TW`）；
+YouTube 不通时上报空串，面板侧不显示该徽章，也不影响其余检测。
+
+两类常见起因与处理：
+
+1. **用户端开着定位权限**（Chrome 的网站位置信息、手机 GPS）：Google 会把定位信号与该 IP 关联 —— 让用户关掉后过一段时间会自行恢复（面板 `/user/server` 页也有这句提示）；
+2. **IP 段本身的问题**（注册地在中国大陆、广播 IP、被转手过的二手 IP）：只能换 IP / 换上游；Google 没有面向 IP 的公开纠错入口。
+
+> 想用面板的**审计规则**（`DetectRule`）防送中是行不通的：它匹配的是用户访问的内容（正则 + 记录/断连/封号），与 IP 归属判定无关。
 
 # How to use
 
